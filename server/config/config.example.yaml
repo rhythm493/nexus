@@ -1,0 +1,15 @@
+# pocket-assistant server configuration
+
+# Server settings
+port: 8443
+service_name: pocket-assistant
+
+# Paths (relative to server directory or absolute)
+certs_dir: ../certs
+mcp_servers_dir: ./mcp-servers
+
+# API Keys (prefer environment variables for secrets)
+# gemini_api_key: "your-api-key-here"
+
+# Logging: debug, info, warn, error
+log_level: info

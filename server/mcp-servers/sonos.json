@@ -1,0 +1,8 @@
+{
+  "name": "sonos",
+  "command": "node",
+  "args": [
+    "/home/rhythm493/Projects/Local/pocket-assistant/mcp-repos/sonos-ts-mcp/dist/index.js"
+  ],
+  "env": {}
+}
