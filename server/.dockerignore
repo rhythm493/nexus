@@ -1,0 +1,48 @@
+# Binaries and build artifacts
+nexus
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Data directories
+data/
+certs/
+streams/
+*.db
+*.db-shm
+*.db-wal
+
+# Development files
+.git
+.gitignore
+*.md
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test files
+*_test.go
+testdata/
+
+# MCP repos (will be installed fresh)
+mcp-repos/
+
+# Node modules (if any)
+node_modules/

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -26,18 +27,26 @@ type Server struct {
 	Tools     []Tool
 }
 
+// ExternalToolProvider is an interface for non-stdio MCP tools
+type ExternalToolProvider interface {
+	ListTools() []Tool
+	ExecuteTool(ctx context.Context, toolName string, args map[string]interface{}) (interface{}, error)
+}
+
 // Host manages multiple MCP servers
 type Host struct {
-	configDir string
-	servers   map[string]*Server
-	mu        sync.RWMutex
+	configDir        string
+	servers          map[string]*Server
+	externalProviders map[string]ExternalToolProvider
+	mu               sync.RWMutex
 }
 
 // NewHost creates a new MCP host
 func NewHost(configDir string) (*Host, error) {
 	return &Host{
-		configDir: configDir,
-		servers:   make(map[string]*Server),
+		configDir:         configDir,
+		servers:           make(map[string]*Server),
+		externalProviders: make(map[string]ExternalToolProvider),
 	}, nil
 }
 
@@ -133,7 +142,7 @@ func (h *Host) startServer(ctx context.Context, cfg ServerConfig) error {
 			Roots: &RootsCaps{ListChanged: true},
 		},
 		ClientInfo: ClientInfo{
-			Name:    "pocket-assistant",
+			Name:    "nexus",
 			Version: "1.0.0",
 		},
 	}
@@ -205,27 +214,55 @@ func (h *Host) ListServers() []string {
 }
 
 // ListTools returns all available tools from all servers
+// RegisterExternalTools registers an external tool provider (non-stdio MCP)
+func (h *Host) RegisterExternalTools(name string, provider ExternalToolProvider) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.externalProviders[name] = provider
+	slog.Info("Registered external tool provider", "name", name)
+}
+
 func (h *Host) ListTools() []Tool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
 	var tools []Tool
+
+	// Add tools from stdio MCP servers
 	for _, server := range h.servers {
 		tools = append(tools, server.Tools...)
 	}
+
+	// Add tools from external providers
+	for _, provider := range h.externalProviders {
+		tools = append(tools, provider.ListTools()...)
+	}
+
 	return tools
 }
 
-// ExecuteTool executes a tool on the appropriate MCP server
+// ExecuteTool executes a tool on the appropriate MCP server or external provider
 func (h *Host) ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (interface{}, error) {
 	h.mu.RLock()
 
-	// Find server that has this tool
+	// Check external providers first
+	for _, provider := range h.externalProviders {
+		for _, tool := range provider.ListTools() {
+			if tool.Name == name {
+				h.mu.RUnlock()
+				return provider.ExecuteTool(ctx, name, args)
+			}
+		}
+	}
+
+	// Find server and tool for sanitization
 	var server *Server
+	var tool *Tool
 	for _, s := range h.servers {
 		for _, t := range s.Tools {
 			if t.Name == name {
 				server = s
+				tool = &t
 				break
 			}
 		}
@@ -235,8 +272,13 @@ func (h *Host) ExecuteTool(ctx context.Context, name string, args map[string]int
 	}
 	h.mu.RUnlock()
 
-	if server == nil {
+	if server == nil || tool == nil {
 		return nil, fmt.Errorf("tool not found: %s", name)
+	}
+
+	// Sanitize arguments based on schema
+	if err := h.sanitizeArguments(tool.InputSchema, args); err != nil {
+		return nil, fmt.Errorf("argument sanitization failed for tool %s: %w", name, err)
 	}
 
 	// Call the tool
@@ -292,4 +334,43 @@ func (h *Host) StopAll() {
 		server.Transport.Close()
 	}
 	h.servers = make(map[string]*Server)
+}
+
+// sanitizeArguments converts stringified numbers to actual numbers if the schema expects it.
+// Returns an error if a required type coercion fails.
+func (h *Host) sanitizeArguments(schema map[string]interface{}, args map[string]interface{}) error {
+	properties, ok := schema["properties"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	for key, value := range args {
+		prop, ok := properties[key].(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		propType, _ := prop["type"].(string)
+		if propType == "number" || propType == "integer" {
+			switch v := value.(type) {
+			case string:
+				num, err := strconv.ParseFloat(v, 64)
+				if err != nil {
+					return fmt.Errorf("argument %q: cannot convert string %q to %s: %w", key, v, propType, err)
+				}
+				args[key] = num
+			case float64, float32, int, int64:
+				// Already numeric, no conversion needed
+			default:
+				slog.Warn("Unexpected argument type for numeric schema field",
+					"key", key,
+					"expected", propType,
+					"got_type", fmt.Sprintf("%T", value),
+					"value", value,
+				)
+			}
+		}
+	}
+
+	return nil
 }

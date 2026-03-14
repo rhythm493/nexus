@@ -1,15 +1,104 @@
-# pocket-assistant server configuration
+# nexus server configuration
 
 # Server settings
 port: 8443
-service_name: pocket-assistant
+service_name: nexus
 
 # Paths (relative to server directory or absolute)
 certs_dir: ../certs
 mcp_servers_dir: ./mcp-servers
 
-# API Keys (prefer environment variables for secrets)
-# gemini_api_key: "your-api-key-here"
+# LLM Provider Configuration
+llm:
+  provider: rotating  # rotating, groq, cerebras, ollama, or lmstudio
+  model: meta-llama/llama-4-scout-17b-16e-instruct
+  api_key: ""  # For Groq (or set GROQ_API_KEY env var)
+  base_url: ""  # For Ollama/LM Studio (leave empty for defaults)
+  # Ollama default: http://localhost:11434/v1
+  # LM Studio default: http://localhost:1234/v1
+
+  # Rotating provider slots (optional, defaults to built-in priority list)
+  # Requires at least one of GROQ_API_KEY or CEREBRAS_API_KEY env vars
+  # slots:
+  #   - provider: groq
+  #     model: meta-llama/llama-4-scout-17b-16e-instruct
+  #   - provider: cerebras
+  #     model: llama3.1-8b
+  #   - provider: groq
+  #     model: llama-3.3-70b-versatile
+
+# Legacy API key format (deprecated, use llm.api_key instead)
+# Set via GROQ_API_KEY environment variable or uncomment:
+# llm_api_key: "your-groq-api-key-here"
 
 # Logging: debug, info, warn, error
 log_level: info
+
+# YouTube settings
+youtube:
+  enabled: true
+  bin_dir: data/bin      # yt-dlp binary location
+  output_dir: data/audio # Audio files output (deprecated, use library.data_dir)
+
+# Radio settings (personal radio station)
+radio:
+  enabled: true
+  liquidsoap_path: liquidsoap    # Path to liquidsoap binary
+  script_path: scripts/radio.liq # Path to radio.liq script
+  telnet_host: 127.0.0.1         # Liquidsoap telnet control host
+  telnet_port: 1234              # Liquidsoap telnet control port
+  stream_port: 8080              # HTTP stream port
+  stream_host: ""                # External hostname for stream URL (auto-detect if empty)
+  crossfade_secs: 3.0            # Crossfade duration between tracks
+  auto_start: true               # Start Liquidsoap automatically
+
+# Library settings (track storage)
+library:
+  data_dir: data/library         # Directory for downloaded audio files
+  database_path: data/library.db # SQLite database path
+  max_size_mb: 10240             # Maximum library size in MB (10GB)
+
+# Assistant Modes Configuration
+modes:
+  - id: sonos
+    name: Music & Speakers
+    icon: speaker
+    description: Control Sonos speakers and play music
+    tool_filters:
+      - sonos_*
+      - radio_*
+      - library_*
+      - youtube_*
+    system_prompt: |
+      You are a music and speaker control assistant. Help users:
+      - Play music on Sonos speakers
+      - Control volume and playback
+      - Manage speaker groups
+      - Search and queue songs
+      Keep responses conversational and concise.
+    default_mode: true
+
+  - id: grocery
+    name: Grocery Shopping
+    icon: shopping_cart
+    description: Compare prices across Zepto, Blinkit, Instamart
+    tool_filters:
+      - grocery_*
+      - compare_*
+      - location_*
+    system_prompt: |
+      You are a grocery shopping assistant. Help users find the best prices and deals.
+      When searching for products, always compare prices across all available services.
+      Keep responses brief and focused on price comparisons and availability.
+
+  - id: websearch
+    name: Web Search
+    icon: search
+    description: Search the web for information
+    tool_filters:
+      - web_*
+      - search_*
+    system_prompt: |
+      You are a research assistant. Help users find accurate information from the web.
+      Always cite sources and provide relevant context.
+      Be objective and comprehensive in your responses.

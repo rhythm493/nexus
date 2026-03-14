@@ -19,7 +19,7 @@ func Advertise(serviceName string, port int) (*Server, error) {
 	// Get hostname
 	hostname, err := os.Hostname()
 	if err != nil {
-		hostname = "pocket-assistant"
+		hostname = "nexus"
 	}
 
 	// Get local IP addresses
@@ -29,7 +29,7 @@ func Advertise(serviceName string, port int) (*Server, error) {
 		ips = []net.IP{}
 	}
 
-	slog.Debug("Advertising mDNS service", "name", serviceName, "port", port, "ips", ips)
+	slog.Info("Advertising mDNS service", "name", serviceName, "port", port, "ips", ips)
 
 	// Create mDNS service
 	service, err := mdns.NewMDNSService(
@@ -39,7 +39,7 @@ func Advertise(serviceName string, port int) (*Server, error) {
 		"",                             // Host name (default: hostname.local.)
 		port,                           // Port
 		ips,                            // IPs
-		[]string{"pocket-assistant"},   // TXT records
+		[]string{"nexus"},              // TXT records
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create mDNS service: %w", err)
@@ -68,7 +68,7 @@ func (s *Server) Shutdown() error {
 	return nil
 }
 
-// getLocalIPs returns all non-loopback IPv4 addresses
+// getLocalIPs returns LAN IPv4 addresses (filters out VPN/Docker/CGNAT)
 func getLocalIPs() ([]net.IP, error) {
 	var ips []net.IP
 
@@ -80,6 +80,11 @@ func getLocalIPs() ([]net.IP, error) {
 	for _, iface := range interfaces {
 		// Skip loopback and down interfaces
 		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+
+		// Skip known VPN/virtual interfaces
+		if isVirtualInterface(iface.Name) {
 			continue
 		}
 
@@ -97,12 +102,50 @@ func getLocalIPs() ([]net.IP, error) {
 				ip = v.IP
 			}
 
-			// Only use IPv4 addresses
-			if ip != nil && ip.To4() != nil {
+			// Only use IPv4 addresses that are LAN IPs
+			if ip != nil && ip.To4() != nil && isLANIP(ip) {
 				ips = append(ips, ip)
 			}
 		}
 	}
 
 	return ips, nil
+}
+
+// isVirtualInterface returns true for known VPN/virtual interface names
+func isVirtualInterface(name string) bool {
+	// Tailscale, Docker, VirtualBox, VMware, etc.
+	virtualPrefixes := []string{"tailscale", "docker", "br-", "veth", "virbr", "vmnet", "vboxnet", "tun", "tap"}
+	for _, prefix := range virtualPrefixes {
+		if len(name) >= len(prefix) && name[:len(prefix)] == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+// isLANIP returns true for typical LAN IP ranges (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+// and filters out CGNAT (100.64-127.x.x used by Tailscale) and Docker (172.17.x.x)
+func isLANIP(ip net.IP) bool {
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return false
+	}
+
+	// 192.168.0.0/16 - common home LAN
+	if ip4[0] == 192 && ip4[1] == 168 {
+		return true
+	}
+
+	// 10.0.0.0/8 - private network
+	if ip4[0] == 10 {
+		return true
+	}
+
+	// 172.16.0.0/12 - but NOT 172.17.x.x (Docker default)
+	if ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31 && ip4[1] != 17 {
+		return true
+	}
+
+	return false
 }

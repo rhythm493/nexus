@@ -20,9 +20,9 @@ class CertService extends ChangeNotifier {
   String? get clientCert => _clientCert;
   String? get clientKey => _clientKey;
 
-  static const _caCertKey = 'pocket_assistant_ca_cert';
-  static const _clientCertKey = 'pocket_assistant_client_cert';
-  static const _clientKeyKey = 'pocket_assistant_client_key';
+  static const _caCertKey = 'nexus_ca_cert';
+  static const _clientCertKey = 'nexus_client_cert';
+  static const _clientKeyKey = 'nexus_client_key';
 
   /// Load certificates from secure storage
   Future<void> loadCertificates() async {

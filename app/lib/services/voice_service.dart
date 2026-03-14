@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
@@ -170,6 +169,10 @@ class VoiceService extends ChangeNotifier {
         return;
       }
 
+      // Cancel any existing subscription before creating a new one
+      await _audioSubscription?.cancel();
+      _audioSubscription = null;
+
       // Create new stream for this session
       _stream = _recognizer!.createStream();
 
@@ -198,9 +201,9 @@ class VoiceService extends ChangeNotifier {
             _recognizer!.decode(_stream!);
           }
 
-          // Get current result
+          // Get current result — only notify when text actually changes
           final result = _recognizer!.getResult(_stream!);
-          if (result.text.isNotEmpty) {
+          if (result.text.isNotEmpty && result.text != _currentText) {
             _currentText = result.text;
             notifyListeners();
           }

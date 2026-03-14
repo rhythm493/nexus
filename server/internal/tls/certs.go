@@ -35,7 +35,7 @@ func LoadServerConfig(certsDir string) (*tls.Config, error) {
 		Certificates: []tls.Certificate{cert},
 		ClientCAs:    caCertPool,
 		ClientAuth:   tls.NoClientCert, // No client cert required for LAN use
-		MinVersion:   tls.VersionTLS12, // TLS 1.2 for better compatibility
+		MinVersion:   tls.VersionTLS13, // TLS 1.3 for stronger security
 	}
 
 	return config, nil

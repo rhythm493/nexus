@@ -1,4 +1,4 @@
-name: pocket_assistant
+name: nexus
 description: Voice-controlled AI assistant connecting to your PC over LAN.
 publish_to: 'none'
 
@@ -35,17 +35,27 @@ dependencies:
   # State management
   provider: ^6.1.1
 
+  # Persistent settings storage
+  shared_preferences: ^2.2.2
+
   # File picker for cert import
   file_picker: ^8.0.0
 
   # Permissions
   permission_handler: ^12.0.0
 
+  # Location services
+  geolocator: ^13.0.2
+
   # UUID generation
   uuid: ^4.3.3
 
   # Material icons
   cupertino_icons: ^1.0.6
+  mobile_scanner: ^7.1.4
+
+  # Shimmer loading effect
+  shimmer: ^3.0.0
 
 dev_dependencies:
   flutter_test:

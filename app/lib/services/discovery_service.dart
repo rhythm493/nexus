@@ -1,11 +1,16 @@
+import 'dart:io';
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:bonsoir/bonsoir.dart';
 
 import '../models/message.dart';
 
-/// Service for discovering pocket-assistant servers via mDNS
+/// Service for discovering Nexus servers via mDNS
 class DiscoveryService extends ChangeNotifier {
   BonsoirDiscovery? _discovery;
+  RawDatagramSocket? _udpSocket;
+  StreamSubscription? _bonsoirSubscription;
+  StreamSubscription? _udpSubscription;
   final List<DiscoveredServer> _servers = [];
   DiscoveredServer? _selectedServer;
   bool _isSearching = false;
@@ -27,44 +32,91 @@ class DiscoveryService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _discovery = BonsoirDiscovery(type: '_pocket-assistant._tcp');
+      _discovery = BonsoirDiscovery(type: '_nexus._tcp');
       await _discovery!.ready;
 
-      _discovery!.eventStream!.listen((event) {
+      _bonsoirSubscription = _discovery!.eventStream!.listen((event) {
         if (event.type == BonsoirDiscoveryEventType.discoveryServiceResolved) {
           final service = event.service as ResolvedBonsoirService;
-          final server = DiscoveredServer(
+          _addServer(DiscoveredServer(
             name: service.name,
             host: service.host ?? service.name,
             port: service.port,
-          );
-
-          // Avoid duplicates
-          if (!_servers.any((s) => s.host == server.host && s.port == server.port)) {
-            _servers.add(server);
-
-            // Auto-select first server
-            if (_selectedServer == null) {
-              _selectedServer = server;
-            }
-            notifyListeners();
-          }
+          ));
         }
       });
 
       await _discovery!.start();
+
+      // Auto-stop discovery after 10 seconds to save resources
+      Future.delayed(const Duration(seconds: 10), () {
+        if (_isSearching) {
+          debugPrint('Auto-stopping discovery after timeout');
+          stopDiscovery();
+        }
+      });
     } catch (e) {
-      _error = 'Discovery failed: $e';
+      debugPrint('mDNS Discovery failed: $e');
       _isSearching = false;
+      _error = e.toString();
+      notifyListeners();
+    }
+
+    _startUDPDiscovery();
+  }
+
+  Future<void> _startUDPDiscovery() async {
+    try {
+      _udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 9999);
+      _udpSubscription = _udpSocket!.listen(
+        (RawSocketEvent event) {
+          if (event == RawSocketEvent.read) {
+            Datagram? dg = _udpSocket!.receive();
+            if (dg != null) {
+              final message = String.fromCharCodes(dg.data);
+              if (message.startsWith("NEXUS:")) {
+                final parts = message.split(":");
+                if (parts.length >= 3) {
+                  _addServer(DiscoveredServer(
+                    name: "LAN (UDP)",
+                    host: parts[1],
+                    port: int.tryParse(parts[2]) ?? 8443,
+                  ));
+                }
+              }
+            }
+          }
+        },
+        onError: (e) {
+          debugPrint('UDP socket error: $e');
+        },
+      );
+    } catch (e) {
+      debugPrint('UDP Discovery failed: $e');
+    }
+  }
+
+  void _addServer(DiscoveredServer server) {
+    if (!_servers.any((s) => s.host == server.host && s.port == server.port)) {
+      _servers.add(server);
+      _selectedServer ??= server;
       notifyListeners();
     }
   }
 
   /// Stop searching
   Future<void> stopDiscovery() async {
+    await _bonsoirSubscription?.cancel();
+    _bonsoirSubscription = null;
     if (_discovery != null) {
       await _discovery!.stop();
       _discovery = null;
+    }
+    await _udpSubscription?.cancel();
+    _udpSubscription = null;
+    if (_udpSocket != null) {
+      _udpSocket!.close();
+      _udpSocket = null;
     }
     _isSearching = false;
     notifyListeners();
@@ -90,6 +142,17 @@ class DiscoveryService extends ChangeNotifier {
   void clearServer() {
     _selectedServer = null;
     notifyListeners();
+  }
+
+  /// Set server from scanned QR code URL
+  void setFromQR(String url) {
+    try {
+      final uri = Uri.parse(url);
+      setManualServer(uri.host, uri.port);
+    } catch (e) {
+      _error = "Invalid QR code URL";
+      notifyListeners();
+    }
   }
 
   @override

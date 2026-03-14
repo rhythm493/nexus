@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // StdioTransport handles communication with an MCP server via stdio
@@ -20,7 +21,8 @@ type StdioTransport struct {
 	stderr    io.ReadCloser
 	scanner   *bufio.Scanner
 	requestID atomic.Int32
-	mu        sync.Mutex
+	writeMu   sync.Mutex // protects stdin writes
+	respMu    sync.Mutex // protects responses map
 	responses map[int]chan *Response
 	closed    bool
 }
@@ -69,6 +71,36 @@ func NewStdioTransport(ctx context.Context, command string, args []string, env [
 	return t, nil
 }
 
+// registerResponse creates a buffered channel for the given request ID and stores it in the map.
+func (t *StdioTransport) registerResponse(id int) chan *Response {
+	ch := make(chan *Response, 1)
+	t.respMu.Lock()
+	t.responses[id] = ch
+	t.respMu.Unlock()
+	return ch
+}
+
+// resolveResponse sends the response on the channel for the given ID and removes it from the map.
+func (t *StdioTransport) resolveResponse(id int, resp *Response) {
+	t.respMu.Lock()
+	ch, ok := t.responses[id]
+	if ok {
+		delete(t.responses, id)
+	}
+	t.respMu.Unlock()
+
+	if ok {
+		ch <- resp
+	}
+}
+
+// cancelResponse removes the channel for the given ID from the map without sending a value.
+func (t *StdioTransport) cancelResponse(id int) {
+	t.respMu.Lock()
+	delete(t.responses, id)
+	t.respMu.Unlock()
+}
+
 // readLoop continuously reads responses from stdout
 func (t *StdioTransport) readLoop() {
 	for t.scanner.Scan() {
@@ -85,12 +117,7 @@ func (t *StdioTransport) readLoop() {
 			continue
 		}
 
-		t.mu.Lock()
-		if ch, ok := t.responses[resp.ID]; ok {
-			ch <- &resp
-			delete(t.responses, resp.ID)
-		}
-		t.mu.Unlock()
+		t.resolveResponse(resp.ID, &resp)
 	}
 
 	if err := t.scanner.Err(); err != nil && !t.closed {
@@ -111,25 +138,24 @@ func (t *StdioTransport) Send(ctx context.Context, method string, params interfa
 	id := int(t.requestID.Add(1))
 	req := NewRequest(id, method, params)
 
-	// Create response channel
-	respChan := make(chan *Response, 1)
-	t.mu.Lock()
-	t.responses[id] = respChan
-	t.mu.Unlock()
+	// Register response channel before sending (buffered to prevent goroutine leaks)
+	respChan := t.registerResponse(id)
 
 	// Marshal and send request
 	data, err := json.Marshal(req)
 	if err != nil {
+		t.cancelResponse(id)
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	slog.Debug("MCP request sending", "method", method, "id", id)
 
-	t.mu.Lock()
+	t.writeMu.Lock()
 	_, err = fmt.Fprintf(t.stdin, "%s\n", data)
-	t.mu.Unlock()
+	t.writeMu.Unlock()
 
 	if err != nil {
+		t.cancelResponse(id)
 		return nil, fmt.Errorf("failed to write request: %w", err)
 	}
 
@@ -141,9 +167,7 @@ func (t *StdioTransport) Send(ctx context.Context, method string, params interfa
 		}
 		return resp, nil
 	case <-ctx.Done():
-		t.mu.Lock()
-		delete(t.responses, id)
-		t.mu.Unlock()
+		t.cancelResponse(id)
 		return nil, ctx.Err()
 	}
 }
@@ -166,16 +190,34 @@ func (t *StdioTransport) Notify(method string, params interface{}) error {
 
 	slog.Debug("MCP notification sending", "method", method)
 
-	t.mu.Lock()
+	t.writeMu.Lock()
 	_, err = fmt.Fprintf(t.stdin, "%s\n", data)
-	t.mu.Unlock()
+	t.writeMu.Unlock()
 
 	return err
 }
 
-// Close terminates the MCP server process
+// Close gracefully terminates the MCP server process.
+// It closes stdin first to signal EOF, waits up to 3 seconds for the process
+// to exit, and kills it if the timeout expires.
 func (t *StdioTransport) Close() error {
 	t.closed = true
+
+	// Close stdin to signal EOF to the child process
 	t.stdin.Close()
-	return t.cmd.Process.Kill()
+
+	// Wait for the process to exit gracefully
+	done := make(chan error, 1)
+	go func() { done <- t.cmd.Wait() }()
+
+	select {
+	case <-done:
+		// Process exited cleanly
+	case <-time.After(3 * time.Second):
+		// Process did not exit in time, kill it
+		t.cmd.Process.Kill()
+		<-done // Reap the zombie process
+	}
+
+	return nil
 }

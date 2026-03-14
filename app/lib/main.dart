@@ -3,15 +3,18 @@ import 'package:provider/provider.dart';
 
 import 'services/api_service.dart';
 import 'services/discovery_service.dart';
+import 'services/location_service.dart';
+import 'services/mode_service.dart';
 import 'services/voice_service.dart';
+import 'services/settings_service.dart';
 import 'screens/chat_screen.dart';
 
 void main() {
-  runApp(const PocketAssistantApp());
+  runApp(const NexusApp());
 }
 
-class PocketAssistantApp extends StatelessWidget {
-  const PocketAssistantApp({super.key});
+class NexusApp extends StatelessWidget {
+  const NexusApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -20,9 +23,12 @@ class PocketAssistantApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => DiscoveryService()),
         ChangeNotifierProvider(create: (_) => ApiService()),
         ChangeNotifierProvider(create: (_) => VoiceService()),
+        ChangeNotifierProvider(create: (_) => SettingsService()),
+        ChangeNotifierProvider(create: (_) => ModeService()),
+        ChangeNotifierProvider(create: (_) => LocationService()),
       ],
       child: MaterialApp(
-        title: 'Pocket Assistant',
+        title: 'Nexus',
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(
             seedColor: Colors.blue,

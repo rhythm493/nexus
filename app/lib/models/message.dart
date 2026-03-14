@@ -1,7 +1,7 @@
 /// Represents a chat message
 class Message {
   final String id;
-  final String role; // 'user', 'assistant', 'tool_call', 'tool_result'
+  final String role; // 'user', 'assistant', 'thinking', 'tool_call', 'tool_result'
   final String content;
   final DateTime timestamp;
   final String? toolName;
@@ -22,6 +22,7 @@ class Message {
   bool get isAssistant => role == 'assistant';
   bool get isToolCall => role == 'tool_call';
   bool get isToolResult => role == 'tool_result';
+  bool get isThinking => role == 'thinking';
 
   factory Message.user(String content) {
     return Message(
@@ -36,6 +37,15 @@ class Message {
     return Message(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       role: 'assistant',
+      content: content,
+      timestamp: DateTime.now(),
+    );
+  }
+
+  factory Message.thinking(String content) {
+    return Message(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      role: 'thinking',
       content: content,
       timestamp: DateTime.now(),
     );

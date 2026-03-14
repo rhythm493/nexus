@@ -46,7 +46,7 @@ class VoiceButton extends StatelessWidget {
               boxShadow: voice.isListening
                   ? [
                       BoxShadow(
-                        color: Theme.of(context).colorScheme.error.withOpacity(0.5),
+                        color: Theme.of(context).colorScheme.error.withValues(alpha: 0.5),
                         blurRadius: 16,
                         spreadRadius: 4,
                       ),
@@ -71,7 +71,7 @@ class VoiceButton extends StatelessWidget {
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             border: Border.all(
-                              color: Theme.of(context).colorScheme.error.withOpacity(0.3),
+                              color: Theme.of(context).colorScheme.error.withValues(alpha: 0.3),
                               width: 2,
                             ),
                           ),
@@ -101,6 +101,7 @@ class VoiceButton extends StatelessWidget {
     if (!voice.isAvailable) {
       final initialized = await voice.initialize();
       if (!initialized) {
+        if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(voice.error ?? 'Voice input not available'),
@@ -154,11 +155,11 @@ class FloatingVoiceButton extends StatelessWidget {
                 size: 32,
               ),
               if (voice.isListening && voice.currentText.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
+                const Padding(
+                  padding: EdgeInsets.only(top: 4),
                   child: Text(
                     '...',
-                    style: const TextStyle(fontSize: 12),
+                    style: TextStyle(fontSize: 12),
                   ),
                 ),
             ],

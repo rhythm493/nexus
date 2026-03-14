@@ -1,12 +1,22 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../models/message.dart';
 import '../services/api_service.dart';
 import '../services/discovery_service.dart';
+import '../services/mode_service.dart';
 import '../services/voice_service.dart';
 import '../widgets/chat_bubble.dart';
+import '../widgets/mode_tabs.dart';
 import '../widgets/voice_button.dart';
+import '../widgets/llm_settings_section.dart';
+import '../widgets/location_settings_section.dart';
+import '../widgets/loading_shimmer.dart';
+
+export '../widgets/loading_shimmer.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -20,32 +30,93 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scrollController = ScrollController();
   final List<Message> _messages = [];
   bool _isLoading = false;
+  bool _isAutoScrolling = false;
+  Timer? _streamThrottleTimer;
+  bool _streamUpdatePending = false;
 
   @override
   void initState() {
     super.initState();
     _initialize();
+
+    // Listen for API connection changes to fetch modes
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final apiService = context.read<ApiService>();
+      apiService.addListener(_onApiServiceChange);
+    });
+  }
+
+  void _onApiServiceChange() async {
+    final apiService = context.read<ApiService>();
+    final modeService = context.read<ModeService>();
+
+    if (apiService.isConnected && apiService.baseUrl != null) {
+      // Fetch modes if not already loaded
+      if (modeService.availableModes.isEmpty && !modeService.isLoading) {
+        debugPrint('Fetching modes from ${apiService.baseUrl}');
+        try {
+          await modeService.fetchModes(apiService.baseUrl!);
+        } catch (e) {
+          debugPrint('Failed to fetch modes: $e');
+        }
+      }
+      // Set the mode if available and different from current
+      if (modeService.selectedModeId != null &&
+          apiService.selectedMode != modeService.selectedModeId) {
+        apiService.setMode(modeService.selectedModeId);
+      }
+    }
   }
 
   Future<void> _initialize() async {
     final voiceService = context.read<VoiceService>();
+    final apiService = context.read<ApiService>();
+    final modeService = context.read<ModeService>();
 
     // Initialize voice
     await voiceService.initialize();
 
-    // Start server discovery
+    // Fetch modes when connected
+    if (apiService.isConnected && apiService.baseUrl != null) {
+      await modeService.fetchModes(apiService.baseUrl!);
+      // Set initial mode
+      if (modeService.selectedModeId != null) {
+        apiService.setMode(modeService.selectedModeId);
+      }
+    }
+
+    // Start server discovery and auto-connect when found
+    if (!mounted) return;
     final discoveryService = context.read<DiscoveryService>();
+    discoveryService.addListener(() {
+      if (!mounted) return;
+      if (!apiService.isConnected && discoveryService.selectedServer != null) {
+        final server = discoveryService.selectedServer!;
+        apiService.setServer(server.url);
+        apiService.checkHealth();
+      }
+    });
     discoveryService.startDiscovery();
   }
 
   void _scrollToBottom() {
+    // Debounce scroll to avoid excessive animations
+    if (_isAutoScrolling) return;
+
+    _isAutoScrolling = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
-        _scrollController.animateTo(
+        _scrollController
+            .animateTo(
           _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
+          duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
-        );
+        )
+            .then((_) {
+          _isAutoScrolling = false;
+        });
+      } else {
+        _isAutoScrolling = false;
       }
     });
   }
@@ -65,42 +136,80 @@ class _ChatScreenState extends State<ChatScreen> {
     String assistantResponse = '';
 
     await for (final event in apiService.chat(text.trim())) {
-      setState(() {
-        switch (event.type) {
-          case 'text':
-            assistantResponse += event.content ?? '';
-            // Update or add assistant message
-            if (_messages.isNotEmpty && _messages.last.isAssistant) {
-              _messages.removeLast();
-            }
-            _messages.add(Message.assistant(assistantResponse));
-            break;
-          case 'tool_call':
+      switch (event.type) {
+        case 'text':
+          assistantResponse += event.content ?? '';
+
+          // Timer-based throttle: update UI at most every 100ms
+          if (!_streamUpdatePending) {
+            _streamUpdatePending = true;
+            _streamThrottleTimer?.cancel();
+            _streamThrottleTimer = Timer(const Duration(milliseconds: 100), () {
+              _streamUpdatePending = false;
+              if (mounted) {
+                setState(() {
+                  if (_messages.isNotEmpty && _messages.last.isAssistant) {
+                    _messages.removeLast();
+                  }
+                  _messages.add(Message.assistant(assistantResponse));
+                });
+                _scrollToBottom();
+              }
+            });
+          }
+          break;
+        case 'thinking':
+          setState(() {
+            _messages.add(Message.thinking(event.content ?? ''));
+          });
+          _scrollToBottom();
+          break;
+        case 'tool_call':
+          setState(() {
             _messages.add(Message.toolCall(
               event.name ?? 'unknown',
               event.args,
             ));
-            break;
-          case 'tool_result':
+          });
+          _scrollToBottom();
+          break;
+        case 'tool_result':
+          setState(() {
             _messages.add(Message.toolResult(
               event.name ?? 'unknown',
               event.result,
             ));
-            break;
-          case 'error':
+          });
+          _scrollToBottom();
+          break;
+        case 'error':
+          setState(() {
             _messages.add(Message(
               id: DateTime.now().millisecondsSinceEpoch.toString(),
               role: 'error',
               content: event.content ?? 'Unknown error',
               timestamp: DateTime.now(),
             ));
-            break;
-          case 'done':
+          });
+          _scrollToBottom();
+          break;
+        case 'done':
+          // Cancel any pending throttled update and do final flush
+          _streamThrottleTimer?.cancel();
+          _streamUpdatePending = false;
+          setState(() {
+            if (assistantResponse.isNotEmpty) {
+              // Remove previous partial assistant message if exists
+              if (_messages.isNotEmpty && _messages.last.isAssistant) {
+                _messages.removeLast();
+              }
+              _messages.add(Message.assistant(assistantResponse));
+            }
             _isLoading = false;
-            break;
-        }
-      });
-      _scrollToBottom();
+          });
+          _scrollToBottom();
+          break;
+      }
     }
 
     setState(() => _isLoading = false);
@@ -118,7 +227,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Pocket Assistant'),
+        title: const Text('Nexus'),
         actions: [
           Consumer<ApiService>(
             builder: (context, api, _) => Icon(
@@ -146,6 +255,9 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Column(
         children: [
+          // Mode selection tabs
+          const ModeTabs(),
+
           // Connection status banner
           Consumer<ApiService>(
             builder: (context, api, _) {
@@ -190,17 +302,26 @@ class _ChatScreenState extends State<ChatScreen> {
                     controller: _scrollController,
                     padding: const EdgeInsets.all(16),
                     itemCount: _messages.length,
+                    // Add cache extent for smoother scrolling
+                    cacheExtent: 500,
                     itemBuilder: (context, index) {
-                      return ChatBubble(message: _messages[index]);
+                      final message = _messages[index];
+                      // Use RepaintBoundary to isolate rebuilds for each bubble
+                      return RepaintBoundary(
+                        child: ChatBubble(
+                          key: ValueKey(message.id),
+                          message: message,
+                        ),
+                      );
                     },
                   ),
           ),
 
-          // Loading indicator
+          // Loading indicator - show typing indicator
           if (_isLoading)
             const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: LinearProgressIndicator(),
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: TypingIndicator(),
             ),
 
           // Input area
@@ -210,7 +331,7 @@ class _ChatScreenState extends State<ChatScreen> {
               color: Theme.of(context).colorScheme.surface,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
+                  color: Colors.black.withValues(alpha: 0.1),
                   blurRadius: 4,
                   offset: const Offset(0, -2),
                 ),
@@ -259,6 +380,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _streamThrottleTimer?.cancel();
+    final apiService = context.read<ApiService>();
+    apiService.removeListener(_onApiServiceChange);
     _textController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -309,6 +433,21 @@ class _SettingsSheet extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               _ServerSection(),
+
+              const SizedBox(height: 24),
+
+              // LLM Provider section
+              Text(
+                'Language Model',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              const LLMSettingsSection(),
+
+              const SizedBox(height: 24),
+
+              // Location section
+              const LocationSettingsSection(),
             ],
           ),
         );
@@ -346,29 +485,40 @@ class _ServerSection extends StatelessWidget {
                   const Text('Discovered servers:'),
                   const SizedBox(height: 8),
                   ...discovery.servers.map((server) => ListTile(
+                        dense: true,
                         title: Text(server.name),
                         subtitle: Text('${server.host}:${server.port}'),
                         trailing: discovery.selectedServer == server
-                            ? const Icon(Icons.check)
+                            ? const Icon(Icons.check, color: Colors.green)
                             : null,
-                        onTap: () {
+                        onTap: () async {
                           discovery.selectServer(server);
                           api.setServer(server.url);
-                          api.checkHealth();
+                          // Show loading snackbar while connecting
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Row(
+                                children: [
+                                  SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                  SizedBox(width: 12),
+                                  Text('Connecting to server...'),
+                                ],
+                              ),
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                          await api.checkHealth();
                         },
                       )),
                 ] else if (discovery.isSearching) ...[
-                  const Row(
-                    children: [
-                      SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                      SizedBox(width: 8),
-                      Text('Searching for servers...'),
-                    ],
-                  ),
+                  const ServerListShimmer(),
                 ] else ...[
                   const Text('No servers found'),
                 ],
@@ -383,6 +533,14 @@ class _ServerSection extends StatelessWidget {
                         onPressed: () => discovery.startDiscovery(),
                         icon: const Icon(Icons.refresh),
                         label: const Text('Refresh'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _showQRScanner(context),
+                        icon: const Icon(Icons.qr_code_scanner),
+                        label: const Text('Scan QR'),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -403,13 +561,43 @@ class _ServerSection extends StatelessWidget {
     );
   }
 
-  void _showManualDialog(BuildContext context) {
+  void _showQRScanner(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => Scaffold(
+          appBar: AppBar(title: const Text('Scan Server QR Code')),
+          body: MobileScanner(
+            onDetect: (capture) {
+              final List<Barcode> barcodes = capture.barcodes;
+              for (final barcode in barcodes) {
+                if (barcode.rawValue != null) {
+                  final String code = barcode.rawValue!;
+                  final discovery = context.read<DiscoveryService>();
+                  final api = context.read<ApiService>();
+                  discovery.setFromQR(code);
+                  if (discovery.hasServer) {
+                    api.setServer(discovery.selectedServer!.url);
+                    api.checkHealth();
+                  }
+                  Navigator.pop(context);
+                  return;
+                }
+              }
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showManualDialog(BuildContext outerContext) {
     final hostController = TextEditingController();
     final portController = TextEditingController(text: '8443');
+    final scaffoldMessenger = ScaffoldMessenger.of(outerContext);
 
     showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
+      context: outerContext,
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Manual Connection'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -433,20 +621,31 @@ class _ServerSection extends StatelessWidget {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () {
+            onPressed: () async {
               final host = hostController.text.trim();
               final port = int.tryParse(portController.text) ?? 8443;
               if (host.isNotEmpty) {
-                final discovery = context.read<DiscoveryService>();
-                final api = context.read<ApiService>();
+                final discovery = outerContext.read<DiscoveryService>();
+                final api = outerContext.read<ApiService>();
                 discovery.setManualServer(host, port);
                 api.setServer('https://$host:$port');
-                api.checkHealth();
-                Navigator.pop(context);
+                Navigator.pop(dialogContext);
+                final connected = await api.checkHealth();
+                if (!connected) {
+                  scaffoldMessenger.showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'Connection failed: ${api.error ?? "Unknown error"}',
+                      ),
+                      backgroundColor: Colors.red.shade700,
+                      duration: const Duration(seconds: 4),
+                    ),
+                  );
+                }
               }
             },
             child: const Text('Connect'),
@@ -456,4 +655,3 @@ class _ServerSection extends StatelessWidget {
     );
   }
 }
-
