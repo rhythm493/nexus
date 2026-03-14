@@ -6,6 +6,7 @@ mcp-repos/
 
 # Compiled binaries
 server/server
+server/nexus
 
 # Go
 bin/
