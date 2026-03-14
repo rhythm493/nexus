@@ -2,6 +2,12 @@
 
 Voice-controlled AI assistant that connects your phone to your PC over LAN. Talk to it, and it controls your Sonos speakers, plays music, searches the web, and more — all through natural language.
 
+<div align="center">
+
+https://github.com/rhythm493/nexus/raw/main/assets/demo.mp4
+
+</div>
+
 ## What it does
 
 Say "play Shape of You" → Nexus searches YouTube, downloads the audio, streams it through Liquidsoap, and auto-connects your Sonos speaker. One voice command, music plays.

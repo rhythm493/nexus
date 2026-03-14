@@ -84,3 +84,8 @@ temp/
 coverage/
 *.lcov
 server/streams/
+
+# Video project (Remotion) — only assets/ output is committed
+video/node_modules/
+video/out/
+video/.cache/
