@@ -1,22 +1,28 @@
 # Nexus
 
-Voice-controlled AI assistant connecting phone to PC via LAN, using Groq API with MCP tool integration.
+Voice-controlled agentic AI assistant connecting phone to PC via LAN. Rotating LLM (Groq + Cerebras) with MCP tool integration.
 
 ## Current Status: Fully Working
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Go Server | ✅ Working | Groq API (llama-4-scout), 30K TPM |
-| Flutter App | ✅ Working | Tested on Moto G52 |
-| MCP/Sonos | ✅ Working | 60+ tools via sonos-ts-mcp |
-| Radio/Liquidsoap | ✅ Working | Always-on stream with crossfade + Icy-Metadata |
-| YouTube | ✅ Working | yt-dlp download (no transcode) |
+| Go Server | ✅ Working | Rotating LLM: 8 slots across Groq + Cerebras (~162K TPM) |
+| Flutter App | ✅ Working | Tested on Moto G52, adb over WiFi |
+| MCP/Sonos | ✅ Working | 24 curated tools (trimmed from 60) via sonos-ts-mcp |
+| Radio/Liquidsoap | ✅ Working | Minimal pipeline: queue → mksafe → mp3 output |
+| YouTube | ✅ Working | yt-dlp download, converts to mp3 for Liquidsoap |
 | Library | ✅ Working | SQLite + FTS5 for cached songs |
 | Voice Input | ✅ Working | Offline via sherpa-onnx (~70MB model) |
-| mDNS Discovery | ✅ Working | Service: `_nexus._tcp`, filters VPN/Docker IPs |
-| TLS | ✅ Working | Server-only TLS, no client certs needed |
+| mDNS Discovery | ✅ Working | Service: `_nexus._tcp`, UDP fallback, filters VPN/Docker IPs |
+| TLS | ✅ Working | TLS 1.3, self-signed certs |
+| Agentic Features | ✅ Working | ReAct thinking, guardrails, error recovery, self-sufficient tools |
 
-**Note**: Sonos displays proper track titles via Icy-Metadata from the Liquidsoap stream.
+## Key Architecture Decisions
+- **radio_play is self-sufficient**: One call = search + download + stream + auto-connect Sonos
+- **Liquidsoap must use mp3**: opus/webm decode fails silently. Don't add normalize() or metadata.map() — breaks playback
+- **Filter ALL 172.x.x.x IPs**: Docker uses various subnets, not just 172.17
+- **API keys from .env only**: Never in config.yaml or code. loadDotenv() in main.go
+- **Tool results capped at 2KB**: Prevents context overflow from large queue/search results
 
 ## Quick Start
 
