@@ -8,7 +8,7 @@ import (
 // ProviderConfig holds LLM provider configuration
 // This mirrors the config.LLMConfig struct
 type ProviderConfig struct {
-	Provider string // "groq", "cerebras", "ollama", "lmstudio", "rotating"
+	Provider string // "gemini", "groq", "cerebras", "ollama", "lmstudio", "cliproxy", "rotating"
 	Model    string
 	APIKey   string
 	BaseURL  string
@@ -38,6 +38,8 @@ func (f *ProviderFactory) CreateProvider(cfg ProviderConfig) (Provider, error) {
 		return NewOpenAIProvider("groq", "https://api.groq.com/openai/v1", cfg.APIKey, cfg.Model, 60*time.Second), nil
 	case "cerebras":
 		return NewOpenAIProvider("cerebras", "https://api.cerebras.ai/v1", cfg.APIKey, cfg.Model, 60*time.Second), nil
+	case "gemini":
+		return NewOpenAIProvider("gemini", "https://generativelanguage.googleapis.com/v1beta/openai", cfg.APIKey, cfg.Model, 60*time.Second), nil
 	case "ollama":
 		baseURL := cfg.BaseURL
 		if baseURL == "" {
@@ -50,6 +52,16 @@ func (f *ProviderFactory) CreateProvider(cfg ProviderConfig) (Provider, error) {
 			baseURL = "http://localhost:1234/v1"
 		}
 		return NewOpenAIProvider("lmstudio", baseURL, "", cfg.Model, 120*time.Second), nil
+	case "cliproxy":
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = "http://localhost:24080/v1"
+		}
+		apiKey := cfg.APIKey
+		if apiKey == "" {
+			apiKey = "dummy"
+		}
+		return NewOpenAIProvider("cliproxy", baseURL, apiKey, cfg.Model, 120*time.Second), nil
 	case "rotating":
 		return NewRotatingProvider(cfg.Slots)
 	default:
@@ -94,6 +106,12 @@ func NewLMStudioProvider(baseURL, model string) (Provider, error) {
 func (f *ProviderFactory) GetAvailableProviders() []ProviderInfo {
 	return []ProviderInfo{
 		{
+			Name:         "gemini",
+			DisplayName:  "Google Gemini",
+			RequiresAuth: true,
+			DefaultURL:   "https://generativelanguage.googleapis.com/v1beta/openai",
+		},
+		{
 			Name:         "groq",
 			DisplayName:  "Groq",
 			RequiresAuth: true,
@@ -116,6 +134,12 @@ func (f *ProviderFactory) GetAvailableProviders() []ProviderInfo {
 			DisplayName:  "LM Studio",
 			RequiresAuth: false,
 			DefaultURL:   "http://localhost:1234/v1",
+		},
+		{
+			Name:         "cliproxy",
+			DisplayName:  "CLIProxyAPI (GPT-4o)",
+			RequiresAuth: false,
+			DefaultURL:   "http://localhost:24080/v1",
 		},
 	}
 }

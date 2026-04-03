@@ -6,15 +6,21 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../models/message.dart';
 import '../services/api_service.dart';
+import '../services/cart_service.dart';
 import '../services/discovery_service.dart';
 import '../services/mode_service.dart';
 import '../services/voice_service.dart';
+import '../widgets/cart_product_card.dart';
+import '../widgets/inline_search.dart';
+import '../widgets/agent_chip.dart';
+import '../widgets/draggable_divider.dart';
 import '../widgets/chat_bubble.dart';
 import '../widgets/mode_tabs.dart';
 import '../widgets/voice_button.dart';
 import '../widgets/llm_settings_section.dart';
 import '../widgets/location_settings_section.dart';
 import '../widgets/loading_shimmer.dart';
+import '../models/cart_full_state.dart';
 
 export '../widgets/loading_shimmer.dart';
 
@@ -28,8 +34,13 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final ScrollController _chatPanelScrollController = ScrollController();
   final List<Message> _messages = [];
   bool _isLoading = false;
+
+  // Grocery mode state
+  double _groceryChatRatio = 0.30;
+  final List<String> _agentChips = [];
   bool _isAutoScrolling = false;
   Timer? _streamThrottleTimer;
   bool _streamUpdatePending = false;
@@ -37,6 +48,10 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    // Load hardcoded modes immediately (no network needed)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<ModeService>().fetchModes('');
+    });
     _initialize();
 
     // Listen for API connection changes to fetch modes
@@ -94,6 +109,10 @@ class _ChatScreenState extends State<ChatScreen> {
         final server = discoveryService.selectedServer!;
         apiService.setServer(server.url);
         apiService.checkHealth();
+        // Set server URL for voice model download + check if model exists
+        final voice = context.read<VoiceService>();
+        voice.setServer(server.url);
+        voice.checkModelStatus();
       }
     });
     discoveryService.startDiscovery();
@@ -121,6 +140,81 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+
+  // --- Grocery mode helpers ---
+
+  bool get _isGroceryMode => context.read<ModeService>().selectedModeId == 'grocery';
+
+  void _handleInlineAdd(String query, String provider) async {
+    final api = context.read<ApiService>();
+    final cartService = context.read<CartService>();
+    if (api.baseUrl == null || api.conversationId == null) return;
+    await cartService.addProduct(api.baseUrl!, api.conversationId!, query, provider);
+    if (mounted) {
+      _addSystemMessage('Added $query');
+      _sendHiddenMessage('I added $query from $provider to the cart. Use cart_view to see the updated cart.');
+    }
+  }
+
+  void _handleCartSwap(String query, String provider) async {
+    final api = context.read<ApiService>();
+    final cartService = context.read<CartService>();
+    if (api.baseUrl == null || api.conversationId == null) return;
+    await cartService.swapItem(api.baseUrl!, api.conversationId!, query, provider);
+    if (mounted) _addSystemMessage('Swapped $query');
+  }
+
+  void _handleCartRemove(String query) async {
+    final api = context.read<ApiService>();
+    final cartService = context.read<CartService>();
+    if (api.baseUrl == null || api.conversationId == null) return;
+    await cartService.removeItem(api.baseUrl!, api.conversationId!, query);
+    if (mounted) _addSystemMessage('Removed $query');
+  }
+
+  void _handleCartClear() {
+    context.read<CartService>().clear();
+    _addSystemMessage('Cart cleared');
+    _sendHiddenMessage('I cleared the cart.');
+  }
+
+  void _handleOptimize() => _sendMessage('Optimize my cart');
+
+  void _addSystemMessage(String text) {
+    setState(() {
+      _messages.add(Message(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        role: 'system',
+        content: text,
+        timestamp: DateTime.now(),
+      ));
+    });
+    _scrollToBottom();
+  }
+
+  void _sendHiddenMessage(String text) async {
+    final api = context.read<ApiService>();
+    if (!api.isConnected) return;
+    setState(() => _isLoading = true);
+    try {
+      await for (final event in api.chat(text)) {
+        _handleSSEEvent(event);
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _isLoading = false);
+  }
+
+  void _handleSSEEvent(SSEEvent event) {
+    switch (event.type) {
+      case 'cart_update':
+        if (mounted) context.read<CartService>().updateFromSSEFull(event.result);
+        break;
+      case 'cart_optimized':
+        if (mounted) context.read<CartService>().updateOptimization(event.result);
+        break;
+    }
+  }
+
   Future<void> _sendMessage(String text) async {
     if (text.trim().isEmpty) return;
 
@@ -136,6 +230,7 @@ class _ChatScreenState extends State<ChatScreen> {
     String assistantResponse = '';
 
     await for (final event in apiService.chat(text.trim())) {
+      debugPrint('[SSE] type=${event.type}, hasResult=${event.result != null}');
       switch (event.type) {
         case 'text':
           assistantResponse += event.content ?? '';
@@ -181,6 +276,12 @@ class _ChatScreenState extends State<ChatScreen> {
             ));
           });
           _scrollToBottom();
+          break;
+        case 'cart_update':
+          if (mounted) context.read<CartService>().updateFromSSEFull(event.result);
+          break;
+        case 'cart_optimized':
+          if (mounted) context.read<CartService>().updateOptimization(event.result);
           break;
         case 'error':
           setState(() {
@@ -282,50 +383,255 @@ class _ChatScreenState extends State<ChatScreen> {
             },
           ),
 
-          // Chat messages
-          Expanded(
-            child: _messages.isEmpty
-                ? const Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.assistant, size: 64, color: Colors.grey),
-                        SizedBox(height: 16),
-                        Text(
-                          'Say something or type a message',
-                          style: TextStyle(color: Colors.grey),
-                        ),
-                      ],
-                    ),
-                  )
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _messages.length,
-                    // Add cache extent for smoother scrolling
-                    cacheExtent: 500,
-                    itemBuilder: (context, index) {
-                      final message = _messages[index];
-                      // Use RepaintBoundary to isolate rebuilds for each bubble
-                      return RepaintBoundary(
-                        child: ChatBubble(
-                          key: ValueKey(message.id),
-                          message: message,
-                        ),
-                      );
-                    },
-                  ),
-          ),
+          // Mode-specific body
+          if (_isGroceryMode) ...[
+            Builder(builder: (_) { debugPrint('[BUILD] Rendering GROCERY body, mode=${context.read<ModeService>().selectedModeId}'); return const SizedBox.shrink(); }),
+            ..._buildGroceryBody(),
+          ] else ...[
+            Builder(builder: (_) { debugPrint('[BUILD] Rendering CHAT body, mode=${context.read<ModeService>().selectedModeId}'); return const SizedBox.shrink(); }),
+            ..._buildChatBody(),
+          ],
+        ],
+      ),
+    );
+  }
 
-          // Loading indicator - show typing indicator
-          if (_isLoading)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: TypingIndicator(),
+  List<Widget> _buildChatBody() {
+    return [
+      // Chat messages
+      Expanded(
+        child: _messages.isEmpty
+            ? const Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.assistant, size: 64, color: Colors.grey),
+                    SizedBox(height: 16),
+                    Text('Say something or type a message', style: TextStyle(color: Colors.grey)),
+                  ],
+                ),
+              )
+            : ListView.builder(
+                controller: _scrollController,
+                padding: const EdgeInsets.all(16),
+                itemCount: _messages.length,
+                cacheExtent: 500,
+                itemBuilder: (context, index) {
+                  final message = _messages[index];
+                  return RepaintBoundary(
+                    child: ChatBubble(key: ValueKey(message.id), message: message),
+                  );
+                },
+              ),
+      ),
+
+      if (_isLoading)
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: TypingIndicator(),
+        ),
+
+      _buildInputArea(),
+    ];
+  }
+
+  List<Widget> _buildGroceryBody() {
+    final screenHeight = MediaQuery.of(context).size.height;
+    final cs = Theme.of(context).colorScheme;
+    final collapsed = _groceryChatRatio <= 0.10;
+
+    return [
+      // Cart area
+      Expanded(
+        flex: ((1 - _groceryChatRatio) * 100).round(),
+        child: Consumer<CartService>(
+          builder: (context, cartService, _) {
+            final cart = cartService.fullCart;
+            return Column(
+              children: [
+                InlineSearch(
+                  baseUrl: context.read<ApiService>().baseUrl,
+                  onAdd: _handleInlineAdd,
+                ),
+                Expanded(
+                  child: cart == null || cart.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.shopping_cart_outlined, size: 48, color: cs.onSurface.withValues(alpha: 0.2)),
+                              const SizedBox(height: 12),
+                              Text('Search above or ask the assistant',
+                                  style: TextStyle(color: cs.onSurface.withValues(alpha: 0.4), fontSize: 13)),
+                            ],
+                          ),
+                        )
+                      : ListView(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          children: [
+                            ...cart.items.map((item) => CartProductCard(
+                                  item: item,
+                                  onSwap: (provider) => _handleCartSwap(item.query, provider),
+                                  onRemove: () => _handleCartRemove(item.query),
+                                )),
+                            ..._agentChips.asMap().entries.map((e) => AgentChip(
+                                  text: e.value,
+                                  onDismiss: () => setState(() => _agentChips.removeAt(e.key)),
+                                )),
+                            if (cart.optimization != null)
+                              _buildOptimizationBanner(cart),
+                          ],
+                        ),
+                ),
+                if (cart != null && !cart.isEmpty) _buildCartFooter(cart),
+              ],
+            );
+          },
+        ),
+      ),
+
+      // Draggable divider
+      GestureDetector(
+        onVerticalDragUpdate: (details) {
+          setState(() {
+            _groceryChatRatio = (_groceryChatRatio - details.primaryDelta! / screenHeight)
+                .clamp(0.08, 0.70);
+          });
+        },
+        child: const DraggableDivider(),
+      ),
+
+      // Chat panel
+      Expanded(
+        flex: (_groceryChatRatio * 100).round(),
+        child: Column(
+          children: [
+            if (!collapsed)
+              Expanded(
+                child: ListView.builder(
+                  controller: _chatPanelScrollController,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  itemCount: _messages.length,
+                  itemBuilder: (context, index) {
+                    final msg = _messages[index];
+                    if (msg.role == 'system') return _buildSystemBubble(msg.content);
+                    final isCompleted = msg.isToolCall &&
+                        index + 1 < _messages.length &&
+                        _messages[index + 1].isToolResult &&
+                        _messages[index + 1].toolName == msg.toolName;
+                    if (msg.isToolResult && index > 0 && _messages[index - 1].isToolCall &&
+                        _messages[index - 1].toolName == msg.toolName) {
+                      return const SizedBox.shrink();
+                    }
+                    return ChatBubble(key: ValueKey(msg.id), message: msg, completed: isCompleted);
+                  },
+                ),
+              ),
+            if (_isLoading && !collapsed)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                child: Row(
+                  children: [
+                    SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary)),
+                    const SizedBox(width: 8),
+                    Text('Thinking...', style: TextStyle(fontSize: 11, color: cs.onSurface.withValues(alpha: 0.5))),
+                  ],
+                ),
+              ),
+            _buildInputArea(),
+          ],
+        ),
+      ),
+    ];
+  }
+
+  Widget _buildCartFooter(CartFullState cart) {
+    final cs = Theme.of(context).colorScheme;
+    final total = cart.cheapestTotal;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLow,
+        border: Border(top: BorderSide(color: cs.outline.withValues(alpha: 0.15))),
+      ),
+      child: Row(
+        children: [
+          Text('Total: ${CartProduct.formatPaise(total)}',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: cs.onSurface)),
+          Text(' \u00b7 ${cart.itemCount} item${cart.itemCount == 1 ? '' : 's'}',
+              style: TextStyle(fontSize: 12, color: cs.onSurface.withValues(alpha: 0.5))),
+          const Spacer(),
+          if (!cart.isOptimized)
+            FilledButton.tonal(
+              onPressed: _handleOptimize,
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('Optimize', style: TextStyle(fontSize: 12)),
             ),
+          const SizedBox(width: 8),
+          IconButton(onPressed: _handleCartClear, icon: Icon(Icons.delete_outline, size: 18, color: cs.error),
+              padding: EdgeInsets.zero, constraints: const BoxConstraints(), tooltip: 'Clear cart'),
+        ],
+      ),
+    );
+  }
 
-          // Input area
-          Container(
+  Widget _buildOptimizationBanner(CartFullState cart) {
+    final opt = cart.optimization!;
+    final cs = Theme.of(context).colorScheme;
+    if (opt.isSplit) {
+      return Container(
+        margin: const EdgeInsets.only(top: 4, bottom: 8),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(color: Colors.green.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(Icons.savings_outlined, size: 16, color: Colors.green[400]),
+              const SizedBox(width: 6),
+              Text('Split saves ${CartProduct.formatPaise(opt.splitSavings)} (${opt.splitSavingsPct.toInt()}%)',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.green[400])),
+            ]),
+            ...opt.splitCarts.map((pc) => Padding(
+                  padding: const EdgeInsets.only(left: 22, top: 2),
+                  child: Text('${pc.provider}: ${pc.itemCount} items \u2014 ${CartProduct.formatPaise(pc.totalPaise)}',
+                      style: TextStyle(fontSize: 11, color: cs.onSurface.withValues(alpha: 0.6))),
+                )),
+          ],
+        ),
+      );
+    }
+    return Container(
+      margin: const EdgeInsets.only(top: 4, bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(color: cs.primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
+      child: Row(children: [
+        Icon(Icons.check_circle_outline, size: 16, color: cs.primary),
+        const SizedBox(width: 6),
+        Text('Best: All from ${opt.singleBest.provider} \u2014 ${CartProduct.formatPaise(opt.singleBest.totalPaise)}',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: cs.primary)),
+      ]),
+    );
+  }
+
+  Widget _buildSystemBubble(String text) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(children: [
+        Expanded(child: Divider(color: cs.outline.withValues(alpha: 0.15))),
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Text(text, style: TextStyle(fontSize: 10, color: cs.onSurface.withValues(alpha: 0.4)))),
+        Expanded(child: Divider(color: cs.outline.withValues(alpha: 0.15))),
+      ]),
+    );
+  }
+
+  Widget _buildInputArea() {
+    return Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.surface,
@@ -372,9 +678,6 @@ class _ChatScreenState extends State<ChatScreen> {
                 ],
               ),
             ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -385,6 +688,7 @@ class _ChatScreenState extends State<ChatScreen> {
     apiService.removeListener(_onApiServiceChange);
     _textController.dispose();
     _scrollController.dispose();
+    _chatPanelScrollController.dispose();
     super.dispose();
   }
 }
@@ -494,6 +798,8 @@ class _ServerSection extends StatelessWidget {
                         onTap: () async {
                           discovery.selectServer(server);
                           api.setServer(server.url);
+                          context.read<VoiceService>().setServer(server.url);
+                          context.read<VoiceService>().checkModelStatus();
                           // Show loading snackbar while connecting
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
@@ -633,6 +939,8 @@ class _ServerSection extends StatelessWidget {
                 final api = outerContext.read<ApiService>();
                 discovery.setManualServer(host, port);
                 api.setServer('https://$host:$port');
+                outerContext.read<VoiceService>().setServer('https://$host:$port');
+                outerContext.read<VoiceService>().checkModelStatus();
                 Navigator.pop(dialogContext);
                 final connected = await api.checkHealth();
                 if (!connected) {

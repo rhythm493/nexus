@@ -1,175 +1,150 @@
 package quickcom
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
-// Client communicates with QuickCom Node.js server via WebSocket
+// Client communicates with QuickCom Node.js server via REST API
 type Client struct {
-	wsConn *websocket.Conn
-	wsURL  string
+	baseURL    string
+	httpClient *http.Client
 }
 
-// NewClient creates a new QuickCom WebSocket client
-func NewClient(baseURL string) (*Client, error) {
+// NewClient creates a new QuickCom HTTP client
+func NewClient(baseURL string) *Client {
 	if baseURL == "" {
-		baseURL = "ws://localhost:5000"
+		baseURL = "http://localhost:5000"
 	}
 
 	return &Client{
-		wsURL: baseURL,
-	}, nil
+		baseURL: baseURL,
+		httpClient: &http.Client{
+			Timeout: 60 * time.Second,
+		},
+	}
 }
 
-// Connect establishes WebSocket connection to QuickCom
-func (c *Client) Connect(ctx context.Context) error {
-	var err error
-	c.wsConn, _, err = websocket.DefaultDialer.DialContext(ctx, c.wsURL, nil)
+// HealthResponse from QuickCom /api/health
+type HealthResponse struct {
+	Status    string `json:"status"`
+	Timestamp string `json:"timestamp"`
+}
+
+// Health checks if QuickCom server is reachable
+func (c *Client) Health(ctx context.Context) (*HealthResponse, error) {
+	resp, err := c.get(ctx, "/api/health")
 	if err != nil {
-		return fmt.Errorf("failed to connect to QuickCom: %w", err)
+		return nil, fmt.Errorf("health check failed: %w", err)
 	}
+	defer resp.Body.Close()
 
-	slog.Info("Connected to QuickCom server", "url", c.wsURL)
-
-	// Wait for "connected" message
-	var msg map[string]interface{}
-	if err := c.wsConn.ReadJSON(&msg); err != nil {
-		return fmt.Errorf("failed to read connection message: %w", err)
+	var health HealthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
+		return nil, fmt.Errorf("failed to decode health response: %w", err)
 	}
-
-	if msgType, ok := msg["type"].(string); !ok || msgType != "connected" {
-		return fmt.Errorf("unexpected connection message: %v", msg)
-	}
-
-	return nil
+	return &health, nil
 }
 
-// SetLocation sets delivery location for all services
-func (c *Client) SetLocation(ctx context.Context, lat, lon float64, location string) error {
-	services := []string{"blinkit", "zepto", "instamart"}
-
-	for _, svc := range services {
-		msg := map[string]interface{}{
-			"type":     "set-location",
-			"service":  svc,
-			"location": location,
-		}
-
-		if err := c.wsConn.WriteJSON(msg); err != nil {
-			return fmt.Errorf("failed to set location for %s: %w", svc, err)
-		}
-
-		// Wait for confirmation
-		var resp map[string]interface{}
-		if err := c.wsConn.ReadJSON(&resp); err != nil {
-			return fmt.Errorf("failed to read location confirmation: %w", err)
-		}
-	}
-
-	slog.Info("Location set for all services", "lat", lat, "lon", lon)
-	return nil
+// SearchRequest for POST /api/search
+type SearchRequest struct {
+	Query     string   `json:"query"`
+	Providers []string `json:"providers,omitempty"`
+	Limit     int      `json:"limit,omitempty"`
 }
 
-// SearchGrocery searches for products across services
-func (c *Client) SearchGrocery(ctx context.Context, query string, services []string) ([]Product, error) {
-	if len(services) == 0 {
-		services = []string{"blinkit", "zepto", "instamart"}
-	}
-
-	results := make([]Product, 0)
-
-	for _, svc := range services {
-		msg := map[string]interface{}{
-			"type":    "search",
-			"service": svc,
-			"query":   query,
-		}
-
-		if err := c.wsConn.WriteJSON(msg); err != nil {
-			slog.Error("Failed to send search to service", "service", svc, "error", err)
-			continue
-		}
-
-		// Read response with timeout
-		c.wsConn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		var resp map[string]interface{}
-		if err := c.wsConn.ReadJSON(&resp); err != nil {
-			slog.Error("Failed to read search response", "service", svc, "error", err)
-			continue
-		}
-		c.wsConn.SetReadDeadline(time.Time{}) // Clear deadline
-
-		if respType, ok := resp["type"].(string); ok && respType == "search-results" {
-			if products, ok := resp["products"].([]interface{}); ok {
-				for _, p := range products {
-					if productMap, ok := p.(map[string]interface{}); ok {
-						results = append(results, Product{
-							ID:            getString(productMap, "id"),
-							Name:          getString(productMap, "name"),
-							Price:         getString(productMap, "price"),
-							OriginalPrice: getStringPtr(productMap, "originalPrice"),
-							Quantity:      getString(productMap, "quantity"),
-							DeliveryTime:  getString(productMap, "deliveryTime"),
-							Discount:      getStringPtr(productMap, "discount"),
-							ImageURL:      getString(productMap, "imageUrl"),
-							Available:     getBool(productMap, "available"),
-							Source:        getString(productMap, "source"),
-						})
-					}
-				}
-			}
-		}
-	}
-
-	return results, nil
+// SearchResponse from POST /api/search
+type SearchResponse struct {
+	Results      map[string]ProviderResult `json:"results"`
+	SearchTimeMs int64                     `json:"searchTimeMs"`
 }
 
-// Product represents a grocery product
+// ProviderResult holds results from a single provider
+type ProviderResult struct {
+	Products     []Product `json:"products"`
+	TotalFound   int       `json:"totalFound"`
+	SearchTimeMs int64     `json:"searchTimeMs"`
+	Cached       bool      `json:"cached"`
+	Stale        bool      `json:"stale"`
+}
+
+// Product represents a grocery product (matches UnifiedProduct from QuickCom)
 type Product struct {
-	ID            string  `json:"id"`
-	Name          string  `json:"name"`
-	Price         string  `json:"price"`
-	OriginalPrice *string `json:"original_price,omitempty"`
-	Quantity      string  `json:"quantity"`
-	DeliveryTime  string  `json:"delivery_time"`
-	Discount      *string `json:"discount,omitempty"`
-	ImageURL      string  `json:"image_url"`
-	Available     bool    `json:"available"`
-	Source        string  `json:"source"`
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	Brand             *string  `json:"brand"`
+	PricePaise        int      `json:"pricePaise"`
+	PriceDisplay      string   `json:"priceDisplay"`
+	MrpPaise          *int     `json:"mrpPaise"`
+	MrpDisplay        *string  `json:"mrpDisplay"`
+	Quantity          string   `json:"quantity"`
+	QuantityValue     *float64 `json:"quantityValue"`
+	QuantityUnit      *string  `json:"quantityUnit"`
+	PerUnitPricePaise *int     `json:"perUnitPricePaise"`
+	DeliveryTime      string   `json:"deliveryTime"`
+	Discount          *string  `json:"discount"`
+	DiscountPct       *int     `json:"discountPct"`
+	ImageURL          string   `json:"imageUrl"`
+	ProductURL        *string  `json:"productUrl"`
+	Available         bool     `json:"available"`
+	Rating            *float64 `json:"rating,omitempty"`
+	TotalRatings      *int     `json:"totalRatings,omitempty"`
+	Source            string   `json:"source"`
 }
 
-// Helper functions
-func getString(m map[string]interface{}, key string) string {
-	if v, ok := m[key].(string); ok {
-		return v
+// Search searches for products across providers
+func (c *Client) Search(ctx context.Context, req SearchRequest) (*SearchResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal search request: %w", err)
 	}
-	return ""
+
+	resp, err := c.post(ctx, "/api/search", body)
+	if err != nil {
+		return nil, fmt.Errorf("search failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var searchResp SearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
+		return nil, fmt.Errorf("failed to decode search response: %w", err)
+	}
+
+	return &searchResp, nil
 }
 
-func getStringPtr(m map[string]interface{}, key string) *string {
-	if v, ok := m[key].(string); ok && v != "" {
-		return &v
-	}
-	return nil
+// LocationRequest for POST /api/location
+type LocationRequest struct {
+	Lat       float64  `json:"lat"`
+	Lon       float64  `json:"lon"`
+	Label     string   `json:"label,omitempty"`
+	Providers []string `json:"providers,omitempty"`
 }
 
-func getBool(m map[string]interface{}, key string) bool {
-	if v, ok := m[key].(bool); ok {
-		return v
+// SetLocation sets delivery location on QuickCom providers
+func (c *Client) SetLocation(ctx context.Context, lat, lon float64, label string) error {
+	body, err := json.Marshal(LocationRequest{
+		Lat:   lat,
+		Lon:   lon,
+		Label: label,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal location request: %w", err)
 	}
-	return false
-}
 
-// Close closes the WebSocket connection
-func (c *Client) Close() error {
-	if c.wsConn != nil {
-		return c.wsConn.Close()
+	resp, err := c.post(ctx, "/api/location", body)
+	if err != nil {
+		return fmt.Errorf("set location failed: %w", err)
 	}
+	defer resp.Body.Close()
+
+	slog.Info("QuickCom location set", "lat", lat, "lon", lon, "label", label)
 	return nil
 }
 
@@ -242,4 +217,47 @@ func (c *Client) ListTools() []ToolDefinition {
 			},
 		},
 	}
+}
+
+// --- HTTP helpers ---
+
+func (c *Client) get(ctx context.Context, path string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	return resp, nil
+}
+
+func (c *Client) post(ctx context.Context, path string, body []byte) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return resp, nil
 }

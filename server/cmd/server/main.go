@@ -1,18 +1,18 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/rhythm493/pocket-assistant/server/config"
 	"github.com/rhythm493/pocket-assistant/server/internal/api"
+	"github.com/rhythm493/pocket-assistant/server/internal/cart"
 	"github.com/rhythm493/pocket-assistant/server/internal/discovery"
 	"github.com/rhythm493/pocket-assistant/server/internal/library"
 	"github.com/rhythm493/pocket-assistant/server/internal/llm"
@@ -27,9 +27,8 @@ import (
 )
 
 func main() {
-	// Load .env file (check server dir and parent dir)
-	loadDotenv("../.env")
-	loadDotenv(".env")
+	// Load .env files (last file takes precedence, shell env vars still win)
+	godotenv.Overload("../.env", ".env")
 
 	// Setup logging
 	logLevel := os.Getenv("LOG_LEVEL")
@@ -104,7 +103,11 @@ func main() {
 	}
 
 	if hasGroceryMode {
-		quickcomBridge, err = quickcom.NewMCPBridge("ws://localhost:5000")
+		quickcomURL := os.Getenv("QUICKCOM_URL")
+		if quickcomURL == "" {
+			quickcomURL = "http://localhost:5000"
+		}
+		quickcomBridge, err = quickcom.NewMCPBridge(quickcomURL)
 		if err != nil {
 			slog.Warn("QuickCom not available", "error", err)
 		} else {
@@ -219,8 +222,23 @@ func main() {
 	}
 	slog.Info("Mode manager initialized", "modes", len(cfg.Modes))
 
+	// Initialize cart system (uses QuickCom for search)
+	var cartManager *cart.Manager
+	var cartTools *cart.ToolHandlers
+	if quickcomBridge != nil {
+		cartManager = cart.NewManager()
+		cartTools = cart.NewToolHandlers(cartManager, quickcomBridge.Client())
+		slog.Info("Cart system initialized")
+	}
+
 	// Create API server
-	server := api.NewServer(cfg, llmProvider, mcpHost, modeManager, tlsConfig, ytService, radioEngine, radioTools)
+	// Get QuickCom client for direct search proxy
+	var quickcomClient *quickcom.Client
+	if quickcomBridge != nil {
+		quickcomClient = quickcomBridge.Client()
+	}
+
+	server := api.NewServer(cfg, llmProvider, mcpHost, modeManager, tlsConfig, ytService, radioEngine, radioTools, cartManager, cartTools, quickcomClient)
 
 	// Start mDNS advertisement
 	mdnsServer, err := mdns.Advertise(cfg.ServiceName, cfg.Port)
@@ -260,38 +278,5 @@ func main() {
 	if err := server.Start(); err != nil {
 		slog.Error("Server error", "error", err)
 		os.Exit(1)
-	}
-}
-
-// loadDotenv reads a .env file and sets environment variables.
-// Only sets vars that aren't already set (env vars take precedence).
-// Silently skips if the file doesn't exist.
-func loadDotenv(path string) {
-	f, err := os.Open(path)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		key, val, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		key = strings.TrimSpace(key)
-		val = strings.TrimSpace(val)
-		// Remove surrounding quotes
-		if len(val) >= 2 && ((val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'')) {
-			val = val[1 : len(val)-1]
-		}
-		// Don't override existing env vars
-		if os.Getenv(key) == "" {
-			os.Setenv(key, val)
-		}
 	}
 }

@@ -1,21 +1,24 @@
 # Nexus
 
-Voice-controlled agentic AI assistant connecting phone to PC via LAN. Rotating LLM (Groq + Cerebras) with MCP tool integration.
+Voice-controlled agentic AI assistant connecting phone to PC via LAN. Rotating LLM (Gemini via CLIProxyAPI + Groq + Cerebras) with MCP tool integration and L4 agentic grocery shopping.
 
 ## Current Status: Fully Working
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Go Server | ✅ Working | Rotating LLM: 8 slots across Groq + Cerebras (~162K TPM) |
-| Flutter App | ✅ Working | Tested on Moto G52, adb over WiFi |
-| MCP/Sonos | ✅ Working | 24 curated tools (trimmed from 60) via sonos-ts-mcp |
+| Go Server | ✅ Working | go-openai SDK, rotating LLM: 9 slots (Gemini + Groq + Cerebras) |
+| Flutter App | ✅ Working | Cart-first grocery UI, Tested on Moto G52, adb over WiFi |
+| MCP/Sonos | ✅ Working | 60 tools via sonos-ts-mcp |
 | Radio/Liquidsoap | ✅ Working | Minimal pipeline: queue → mksafe → mp3 output |
 | YouTube | ✅ Working | yt-dlp download, converts to mp3 for Liquidsoap |
 | Library | ✅ Working | SQLite + FTS5 for cached songs |
-| Voice Input | ✅ Working | Offline via sherpa-onnx (~70MB model) |
+| Voice Input | ✅ Working | Offline via sherpa-onnx (~70MB model), served from Go backend |
 | mDNS Discovery | ✅ Working | Service: `_nexus._tcp`, UDP fallback, filters VPN/Docker IPs |
 | TLS | ✅ Working | TLS 1.3, self-signed certs |
 | Agentic Features | ✅ Working | ReAct thinking, guardrails, error recovery, self-sufficient tools |
+| Grocery Mode | ✅ Working | L4 agentic: cart system, price comparison, Blinkit + Instamart + Zepto |
+| CLIProxyAPI | ✅ Working | Gemini 3 Flash via free API key, auto-fallback to Groq/Cerebras |
+| QuickCom | ✅ Working | Refactored: REST API, provider pattern, TypeScript, SQLite cache |
 
 ## Key Architecture Decisions
 - **radio_play is self-sufficient**: One call = search + download + stream + auto-connect Sonos
@@ -23,6 +26,12 @@ Voice-controlled agentic AI assistant connecting phone to PC via LAN. Rotating L
 - **Filter ALL 172.x.x.x IPs**: Docker uses various subnets, not just 172.17
 - **API keys from .env only**: Never in config.yaml or code. loadDotenv() in main.go
 - **Tool results capped at 2KB**: Prevents context overflow from large queue/search results
+- **go-openai SDK**: Adapter pattern — internal types unchanged, SDK at the boundary
+- **CLIProxyAPI as LLM proxy**: Gemini via free API key, `nexus-local` auth, port 24080
+- **QuickCom is separate service**: Node.js + Puppeteer, REST API (no WebSocket), Go bridge via HTTP
+- **Cart state in Go memory**: Per-conversation, event-sourced, state machine (idle→building→optimized→approved)
+- **SSE line buffering**: Large cart_update events can span TCP chunks — Flutter SSE parser buffers partial lines
+- **Voice model served from Go backend**: `/api/v1/models/speech` endpoint caches from GitHub, app downloads once
 
 ## Quick Start
 
@@ -529,7 +538,76 @@ docker-compose down
 docker-compose build && docker-compose up -d
 ```
 
+## Grocery System Architecture
+
+```
+Flutter App (Grocery Mode)
+├── Cart-first UI (70% cart, 30% collapsible chat)
+├── Inline search bar (direct QuickCom search, no LLM)
+├── Rich product cards (images, brands, provider selection)
+├── Agent advice chips (minimal LLM suggestions)
+├── Draggable divider between cart and chat
+│
+├── SSE events: cart_update, cart_optimized
+├── REST: /api/v1/cart/{id}/full, /api/v1/search, /api/v1/cart/{id}/add
+│
+Nexus Go Server
+├── Cart Manager (in-memory, per conversation, event-sourced)
+│   ├── State machine: idle → building → optimized → approved
+│   ├── 7 tools: cart_add, cart_remove, cart_view, cart_optimize, cart_clear, price_check, find_deals
+│   └── Optimizer: deterministic Go code (single vs split provider)
+├── go-openai SDK (adapter pattern)
+├── CLIProxyAPI (Gemini 3 Flash, port 24080)
+├── Rotating provider (Gemini → Groq → Cerebras fallback)
+│
+QuickCom (Node.js, separate service)
+├── Provider pattern: Blinkit, Zepto, Instamart
+├── REST API (replaced WebSocket)
+├── SQLite cache (6-48h TTLs, stale-while-revalidate)
+├── Spread snapshots (price tracking across 24h)
+├── 74+ darkstores (Pune grid scan)
+└── Shared BrowserPool (one Chrome, multiple pages)
+```
+
+### Grocery Mode Tools (exposed to LLM)
+| Tool | Purpose |
+|------|---------|
+| `cart_add(items)` | Search + add multiple items, concurrent search across providers |
+| `cart_remove(item)` | Remove by name |
+| `cart_view()` | Compact cart summary |
+| `cart_optimize()` | Find cheapest: single provider vs split |
+| `cart_clear()` | Reset cart |
+| `price_check(query)` | Quick lookup, no cart change |
+| `find_deals(category?)` | Discounted items |
+
+### QuickCom Providers
+| Provider | Approach | Puppeteer? |
+|----------|----------|-----------|
+| Blinkit | `page.evaluate(fetch(...))` from Chrome context | Yes (for search) |
+| Zepto | Direct HTTP API, IPv4 forced | No (only for init) |
+| Instamart | SPA navigation + response capture | Yes (for search) |
+
 ## Changelog
+
+### 2026-03-19 (Grocery v0.2)
+- **go-openai SDK migration**: Replaced hand-rolled HTTP with `sashabaranov/go-openai`, adapter pattern
+- **CLIProxyAPI integration**: Gemini 3 Flash as primary LLM via free API key, auto-fallback
+- **QuickCom refactor**: Complete rewrite — REST API, provider pattern, TypeScript, no more WebSocket
+  - Blinkit: `page.evaluate(fetch)` approach (Cloudflare bypassed)
+  - Zepto: Direct HTTP API (no Puppeteer for search)
+  - Instamart: SPA navigation capture
+  - SQLite cache with 6-48h TTLs, 48 popular queries, spread snapshots
+  - 74 darkstores discovered via Pune grid scan
+- **Cart system**: In-memory per conversation, state machine, event-sourced
+  - 7 tools: cart_add, cart_remove, cart_view, cart_optimize, cart_clear, price_check, find_deals
+  - Deterministic optimizer (single vs split provider, 5% threshold)
+  - REST endpoints: full cart, direct add, swap, search proxy
+- **Schema improvements**: brand, quantity_value/unit, per_unit_price_paise, product_url, discount_pct
+- **Cart-first Flutter UI**: Inline search, rich product cards, agent chips, draggable divider
+  - Mode-based body swap (same screen, different layout for grocery vs chat)
+  - SSE line buffering fix for large cart_update events
+- **Voice model**: Served from Go backend (`/api/v1/models/speech`), download on demand with confirmation dialog
+- **Modes hardcoded**: No more server fetch for mode list
 
 ### 2026-01-31 (Radio Integration)
 - Replaced blocking YouTube transcoding with always-on Liquidsoap radio

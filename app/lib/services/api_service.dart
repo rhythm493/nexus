@@ -144,8 +144,15 @@ class ApiService extends ChangeNotifier {
         },
       );
 
+      // Buffer partial lines across TCP chunks — large SSE events (cart_update)
+      // can span multiple chunks and must be reassembled before JSON parsing.
+      String lineBuffer = '';
       await for (final chunk in sseStream) {
-        for (final line in chunk.split('\n')) {
+        lineBuffer += chunk;
+        final lines = lineBuffer.split('\n');
+        // Keep the last element (may be incomplete) in the buffer
+        lineBuffer = lines.removeLast();
+        for (final line in lines) {
           if (line.startsWith('data: ')) {
             final data = line.substring(6);
             try {
@@ -153,9 +160,17 @@ class ApiService extends ChangeNotifier {
               yield SSEEvent.fromJson(json);
             } catch (e) {
               // Skip malformed lines
+              debugPrint('[SSE] Parse error: $e (line length: ${data.length})');
             }
           }
         }
+      }
+      // Process any remaining data in buffer
+      if (lineBuffer.startsWith('data: ')) {
+        try {
+          final json = jsonDecode(lineBuffer.substring(6)) as Map<String, dynamic>;
+          yield SSEEvent.fromJson(json);
+        } catch (_) {}
       }
     } on TimeoutException {
       yield SSEEvent(type: 'error', content: 'Connection timed out: no data received');

@@ -4,8 +4,9 @@ import '../models/message.dart';
 
 class ChatBubble extends StatelessWidget {
   final Message message;
+  final bool completed;
 
-  const ChatBubble({super.key, required this.message});
+  const ChatBubble({super.key, required this.message, this.completed = false});
 
   @override
   Widget build(BuildContext context) {
@@ -19,7 +20,7 @@ class ChatBubble extends StatelessWidget {
       case 'thinking':
         return _ThinkingBubble(message: message);
       case 'tool_call':
-        return _ToolCallBubble(message: message, theme: theme);
+        return _ToolCallBubble(message: message, theme: theme, completed: completed);
       case 'tool_result':
         return _ToolResultBubble(message: message, theme: theme);
       case 'error':
@@ -179,8 +180,9 @@ class _ThinkingBubbleState extends State<_ThinkingBubble> {
 class _ToolCallBubble extends StatefulWidget {
   final Message message;
   final ThemeData theme;
+  final bool completed;
 
-  const _ToolCallBubble({required this.message, required this.theme});
+  const _ToolCallBubble({required this.message, required this.theme, this.completed = false});
 
   @override
   State<_ToolCallBubble> createState() => _ToolCallBubbleState();
@@ -220,14 +222,16 @@ class _ToolCallBubbleState extends State<_ToolCallBubble> {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: theme.colorScheme.secondary,
-                    ),
-                  ),
+                  widget.completed
+                      ? Icon(Icons.check_circle, size: 14, color: Colors.green[400])
+                      : SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: theme.colorScheme.secondary,
+                          ),
+                        ),
                   const SizedBox(width: 8),
                   Text(
                     _formatToolName(name),

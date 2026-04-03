@@ -17,23 +17,14 @@ class VoiceButton extends StatelessWidget {
       builder: (context, voice, _) {
         // Show download progress
         if (voice.isDownloading) {
-          return Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              shape: BoxShape.circle,
-            ),
-            child: const Padding(
-              padding: EdgeInsets.all(12),
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          );
+          return _DownloadingIndicator(progress: voice.downloadProgress);
         }
 
         return GestureDetector(
-          onLongPressStart: (_) => _startListening(context, voice),
-          onLongPressEnd: (_) => _stopListening(voice),
+          // Regular tap for download dialog, long press for voice
+          onTap: voice.needsDownload ? () => _startListening(context, voice) : null,
+          onLongPressStart: voice.needsDownload ? null : (_) => _startListening(context, voice),
+          onLongPressEnd: voice.needsDownload ? null : (_) => _stopListening(voice),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             width: voice.isListening ? 64 : 48,
@@ -41,7 +32,9 @@ class VoiceButton extends StatelessWidget {
             decoration: BoxDecoration(
               color: voice.isListening
                   ? Theme.of(context).colorScheme.error
-                  : Theme.of(context).colorScheme.primary,
+                  : voice.needsDownload
+                      ? Theme.of(context).colorScheme.surfaceContainerHighest
+                      : Theme.of(context).colorScheme.primary,
               shape: BoxShape.circle,
               boxShadow: voice.isListening
                   ? [
@@ -56,7 +49,6 @@ class VoiceButton extends StatelessWidget {
             child: Stack(
               alignment: Alignment.center,
               children: [
-                // Pulsing animation when listening
                 if (voice.isListening)
                   TweenAnimationBuilder<double>(
                     tween: Tween(begin: 1.0, end: 1.3),
@@ -78,14 +70,13 @@ class VoiceButton extends StatelessWidget {
                         ),
                       );
                     },
-                    onEnd: () {
-                      // Restart animation
-                    },
                   ),
-
-                // Icon
                 Icon(
-                  voice.isListening ? Icons.mic : Icons.mic_none,
+                  voice.needsDownload
+                      ? Icons.download
+                      : voice.isListening
+                          ? Icons.mic
+                          : Icons.mic_none,
                   color: Colors.white,
                   size: voice.isListening ? 32 : 24,
                 ),
@@ -98,6 +89,25 @@ class VoiceButton extends StatelessWidget {
   }
 
   void _startListening(BuildContext context, VoiceService voice) async {
+    // If model needs download, show confirmation dialog
+    if (voice.needsDownload) {
+      final confirmed = await _showDownloadDialog(context);
+      if (!confirmed) return;
+      if (!context.mounted) return;
+
+      final downloaded = await voice.downloadModel();
+      if (!context.mounted) return;
+      if (!downloaded) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(voice.error ?? 'Download failed'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+    }
+
     if (!voice.isAvailable) {
       final initialized = await voice.initialize();
       if (!initialized) {
@@ -115,8 +125,67 @@ class VoiceButton extends StatelessWidget {
     await voice.startListening(onResult: onResult);
   }
 
+  Future<bool> _showDownloadDialog(BuildContext context) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Download Speech Model'),
+            content: const Text(
+              'Voice input requires a ~70MB speech recognition model.\n\n'
+              'This will be downloaded once from your Nexus server and cached for future use.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Download'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
   void _stopListening(VoiceService voice) {
     voice.stopListening();
+  }
+}
+
+class _DownloadingIndicator extends StatelessWidget {
+  final double progress;
+
+  const _DownloadingIndicator({required this.progress});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 48,
+      height: 48,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        shape: BoxShape.circle,
+      ),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          SizedBox(
+            width: 36,
+            height: 36,
+            child: CircularProgressIndicator(
+              value: progress > 0 ? progress : null,
+              strokeWidth: 2,
+            ),
+          ),
+          Text(
+            progress > 0 ? '${(progress * 100).toInt()}%' : '',
+            style: const TextStyle(fontSize: 9),
+          ),
+        ],
+      ),
+    );
   }
 }
 

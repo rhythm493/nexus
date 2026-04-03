@@ -46,6 +46,7 @@ Phone (Flutter)  ──HTTPS──▶  PC (Go Server)  ──MCP──▶  Sonos
 - **Collapsible UI** — Tool calls and thinking bubbles collapse to keep chat clean
 - **mDNS discovery** — Phone auto-discovers server on LAN
 - **TLS encrypted** — Self-signed certificates, TLS 1.3
+- **Grocery shopping** — Agentic assistant for adding items to cart, comparing prices across Blinkit/Zepto/Instamart, and managing shopping lists
 
 ## Quick Start
 
@@ -66,6 +67,7 @@ cd nexus
 # Create .env with your API keys
 cp .env.example .env
 # Edit .env — add GROQ_API_KEY and CEREBRAS_API_KEY
+# For grocery mode, also set up QuickCom (see docs/grocery-v0.2.md)
 ```
 
 ### 2. Start the server
@@ -89,7 +91,7 @@ The app auto-discovers the server via mDNS/UDP. If not, go to Settings and enter
 | Mode | Tools | Description |
 |------|-------|-------------|
 | **Music & Speakers** | 24 tools | Sonos control, radio playback, YouTube search |
-| **Grocery Shopping** | — | Price comparison across Zepto, Blinkit, Instamart (requires QuickCom) |
+| **Grocery Shopping** | 15+ tools | Add items to cart, compare prices across Zepto/Blinkit/Instamart, manage shopping lists, voice-controlled grocery assistant |
 | **Web Search** | 1 tool | DuckDuckGo web search |
 
 ## How Music Playback Works

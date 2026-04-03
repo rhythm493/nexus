@@ -163,9 +163,9 @@ func Load() (*Config, error) {
 				ID:          "grocery",
 				Name:        "Grocery Shopping",
 				Icon:        "shopping_cart",
-				Description: "Compare prices across Zepto, Blinkit, Instamart",
-				ToolFilters: []string{"grocery_*", "compare_*", "location_*"},
-				SystemPrompt: "You are a grocery shopping assistant. Help users find the best prices and deals across Zepto, Blinkit, and Instamart.\n\n## Rules\n- When searching for products, compare prices across all available services\n- Before calling any tool, briefly explain your reasoning\n- If a step fails, try an alternative approach\n- Keep responses brief and focused on price comparisons",
+				Description: "Build optimized grocery carts across Zepto, Blinkit, Instamart",
+				ToolFilters: []string{"cart_*", "price_check", "find_deals"},
+				SystemPrompt: "You are a grocery shopping assistant with a virtual cart system.\n\n## Cart workflow\n1. When the user asks to buy groceries, use cart_add with ALL items in one call\n   - Write SPECIFIC search queries: include product type, variant, and practical quantity\n   - Example: \"make butter chicken\" → cart_add(items: [\"boneless chicken breast 500g\", \"amul butter 100g\", \"fresh cream 200ml\", \"onion 500g\", \"tomato 500g\", \"ginger garlic paste\", \"kashmiri red chilli powder\", \"garam masala\"])\n   - BAD: \"butter\", \"chicken\", \"cream\" (too generic — matches wrong products)\n   - GOOD: \"amul butter 100g\", \"chicken breast 500g\", \"amul fresh cream 200ml\"\n2. After adding, REVIEW the matched product names in the result\n3. If a match is wrong (e.g. \"peanut butter\" instead of cooking butter), remove it and re-add with a more specific query\n4. Once satisfied, use cart_optimize to find the cheapest strategy\n5. Present the result: single-provider vs split, savings amount\n6. Wait for user approval\n\n## Tools\n- cart_add(items): Add multiple items — each string is a search query, be specific with type/brand/size\n- cart_remove(item): Remove a specific item\n- cart_view(): Show current cart with per-provider prices\n- cart_optimize(): Find cheapest ordering strategy (single vs split)\n- cart_clear(): Reset cart\n- price_check(query): Quick price lookup without touching the cart\n- find_deals(category): Browse discounted items\n\n## Rules\n- ALWAYS use cart_add for multiple items in ONE call, never one-by-one\n- Write search queries as you would type them in a grocery app\n- After cart_optimize, present both options clearly with totals in rupees\n- Keep responses concise — the user is on a phone\n- If an item isn't found, tell the user and suggest alternatives\n- Show prices in rupees (₹), not paise",
 			},
 			{
 				ID:          "websearch",
@@ -271,9 +271,14 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("CEREBRAS_API_KEY is required for Cerebras provider")
 		}
 	case "rotating":
-		if cfg.LLM.APIKey == "" && cfg.CerebrasAPIKey == "" {
-			return nil, fmt.Errorf("at least one of GROQ_API_KEY or CEREBRAS_API_KEY is required for rotating provider")
+		// Rotating needs at least one real API key OR cliproxy available
+		hasKey := cfg.LLM.APIKey != "" || cfg.CerebrasAPIKey != ""
+		hasCliProxy := os.Getenv("CLIPROXY_API_KEY") != "" || os.Getenv("CLIPROXY_URL") != ""
+		if !hasKey && !hasCliProxy {
+			return nil, fmt.Errorf("at least one of GROQ_API_KEY, CEREBRAS_API_KEY, or CLIPROXY_API_KEY/CLIPROXY_URL is required for rotating provider")
 		}
+	case "cliproxy":
+		// No API key required
 	}
 
 	// Convert relative paths to absolute

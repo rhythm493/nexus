@@ -16,10 +16,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rhythm493/pocket-assistant/server/config"
+	"github.com/rhythm493/pocket-assistant/server/internal/cart"
 	"github.com/rhythm493/pocket-assistant/server/internal/discovery"
 	"github.com/rhythm493/pocket-assistant/server/internal/llm"
 	"github.com/rhythm493/pocket-assistant/server/internal/mcp"
 	"github.com/rhythm493/pocket-assistant/server/internal/mode"
+	"github.com/rhythm493/pocket-assistant/server/internal/quickcom"
 	"github.com/rhythm493/pocket-assistant/server/internal/radio"
 	"github.com/rhythm493/pocket-assistant/server/internal/youtube"
 )
@@ -36,6 +38,9 @@ type Server struct {
 	youtube       *youtube.Service
 	radioEngine   *radio.Engine
 	radioTools    *radio.ToolHandlers
+	cartManager    *cart.Manager
+	cartTools      *cart.ToolHandlers
+	quickcomClient *quickcom.Client
 	rateLimits    sync.Map // map[string]time.Time — per-IP last request time
 	done          chan struct{}
 }
@@ -85,17 +90,20 @@ type ToolsResponse struct {
 }
 
 // NewServer creates a new API server
-func NewServer(cfg *config.Config, llmProvider llm.Provider, mcpHost *mcp.Host, modeManager *mode.Manager, tlsConfig *tls.Config, yt *youtube.Service, radioEngine *radio.Engine, radioTools *radio.ToolHandlers) *Server {
+func NewServer(cfg *config.Config, llmProvider llm.Provider, mcpHost *mcp.Host, modeManager *mode.Manager, tlsConfig *tls.Config, yt *youtube.Service, radioEngine *radio.Engine, radioTools *radio.ToolHandlers, cartManager *cart.Manager, cartTools *cart.ToolHandlers, quickcomClient *quickcom.Client) *Server {
 	return &Server{
-		config:      cfg,
-		llmProvider: llmProvider,
-		mcpHost:     mcpHost,
-		modeManager: modeManager,
-		tlsConfig:   tlsConfig,
-		youtube:     yt,
-		radioEngine: radioEngine,
-		radioTools:  radioTools,
-		done:        make(chan struct{}),
+		config:         cfg,
+		llmProvider:    llmProvider,
+		mcpHost:        mcpHost,
+		modeManager:    modeManager,
+		tlsConfig:      tlsConfig,
+		youtube:        yt,
+		radioEngine:    radioEngine,
+		radioTools:     radioTools,
+		cartManager:    cartManager,
+		cartTools:      cartTools,
+		quickcomClient: quickcomClient,
+		done:           make(chan struct{}),
 	}
 }
 
@@ -123,6 +131,10 @@ func (s *Server) startConversationCleanup() {
 					}
 					return true
 				})
+				// Clean up stale carts
+				if s.cartManager != nil {
+					s.cartManager.CleanupStaleCarts(1 * time.Hour)
+				}
 				// Also clean up stale rate limit entries (older than 1 minute)
 				s.rateLimits.Range(func(key, value any) bool {
 					lastReq := value.(time.Time)
@@ -164,6 +176,23 @@ func (s *Server) Start() error {
 		mux.HandleFunc("POST /api/v1/radio/skip", s.handleRadioSkip)
 		mux.HandleFunc("GET /api/v1/radio/stream", s.handleRadioStream)
 	}
+
+	// Cart endpoints
+	if s.cartManager != nil {
+		mux.HandleFunc("GET /api/v1/cart/{convId}", s.handleGetCart)
+		mux.HandleFunc("GET /api/v1/cart/{convId}/full", s.handleGetCartFull)
+		mux.HandleFunc("POST /api/v1/cart/{convId}/swap", s.handleSwapCartItem)
+		mux.HandleFunc("POST /api/v1/cart/{convId}/add", s.handleAddCartItem)
+		mux.HandleFunc("DELETE /api/v1/cart/{convId}/item/{query}", s.handleRemoveCartItem)
+	}
+
+	// Direct search proxy (for inline search in grocery UI)
+	if s.quickcomClient != nil {
+		mux.HandleFunc("GET /api/v1/search", s.handleSearch)
+	}
+
+	// Model download endpoint (speech recognition model served from cache)
+	mux.HandleFunc("GET /api/v1/models/speech", s.handleModelDownload)
 
 	// Provider endpoints
 	mux.HandleFunc("GET /api/v1/providers", s.handleGetProviders)
@@ -356,6 +385,23 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Add cart tools if mode allows them
+	if s.cartTools != nil {
+		cartToolDefs := s.cartTools.ToolDefinitions()
+		for _, def := range cartToolDefs {
+			if s.modeManager.MatchesFilter(def.Name, currentMode) {
+				tools = append(tools, llm.Tool{
+					Type: "function",
+					Function: llm.Function{
+						Name:        def.Name,
+						Description: def.Description,
+						Parameters:  def.Parameters,
+					},
+				})
+			}
+		}
+	}
+
 	slog.Info("Tools selected", "mode", currentMode.ID, "count", len(tools))
 
 	// Build message history with summarization
@@ -462,9 +508,27 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 					Args: args,
 				})
 
-				// Execute tool - check if it's a radio tool first
+				// Execute tool - check cart tools, then radio tools, then MCP
 				var result interface{}
-				if s.radioTools != nil && radio.IsRadioTool(toolCall.Function.Name) {
+				if s.cartTools != nil && cart.IsCartTool(toolCall.Function.Name) {
+					result, err = s.cartTools.ExecuteTool(ctx, convID, toolCall.Function.Name, args)
+					if err != nil {
+						slog.Error("Cart tool execution failed", "tool", toolCall.Function.Name, "error", err)
+						result = map[string]interface{}{"error": fmt.Sprintf("Tool '%s' failed: %s", toolCall.Function.Name, err.Error())}
+					}
+					// Emit cart-specific SSE events for Flutter UI (full detail for rich cards)
+					if c := s.cartManager.GetCart(convID); c != nil {
+						switch toolCall.Function.Name {
+						case "cart_add", "cart_remove", "cart_clear":
+							s.sendSSE(w, flusher, SSEEvent{Type: "cart_update", Result: c.FullDetail()})
+						case "cart_optimize":
+							s.sendSSE(w, flusher, SSEEvent{Type: "cart_update", Result: c.FullDetail()})
+							if c.Optimization != nil {
+								s.sendSSE(w, flusher, SSEEvent{Type: "cart_optimized", Result: c.Optimization})
+							}
+						}
+					}
+				} else if s.radioTools != nil && radio.IsRadioTool(toolCall.Function.Name) {
 					result, err = s.radioTools.ExecuteTool(ctx, toolCall.Function.Name, args)
 					if err != nil {
 						slog.Error("Radio tool execution failed", "tool", toolCall.Function.Name, "error", err)

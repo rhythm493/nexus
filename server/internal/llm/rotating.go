@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -19,6 +20,8 @@ type SlotConfig struct {
 // defaultSlots is the priority-ordered list of provider+model pairs used when
 // no custom slots are supplied to NewRotatingProvider.
 var defaultSlots = []SlotConfig{
+	{Provider: "gemini", Model: "gemini-2.5-flash"},         // Direct Gemini API (strong tool calling, free tier)
+	{Provider: "cliproxy", Model: "gemini-3-flash-preview"}, // Gemini via CLIProxyAPI (OAuth fallback)
 	{Provider: "groq", Model: "meta-llama/llama-4-scout-17b-16e-instruct"},
 	{Provider: "cerebras", Model: "llama3.1-8b"},
 	{Provider: "groq", Model: "llama-3.3-70b-versatile"},
@@ -31,15 +34,27 @@ var defaultSlots = []SlotConfig{
 
 // providerBaseURLs maps provider names to their OpenAI-compatible base URLs.
 var providerBaseURLs = map[string]string{
+	"gemini":   "https://generativelanguage.googleapis.com/v1beta/openai",
 	"groq":     "https://api.groq.com/openai/v1",
 	"cerebras": "https://api.cerebras.ai/v1",
+	"cliproxy": "http://localhost:24080/v1",
 }
 
 // providerAPIKeyEnvs maps provider names to the environment variable that
-// holds the corresponding API key.
+// holds the corresponding API key. Providers with dummy keys (cliproxy) use
+// the env var if set, otherwise fall back to "dummy".
 var providerAPIKeyEnvs = map[string]string{
+	"gemini":   "GEMINI_API_KEY",
 	"groq":     "GROQ_API_KEY",
 	"cerebras": "CEREBRAS_API_KEY",
+	"cliproxy": "CLIPROXY_API_KEY",
+}
+
+// providers that work without a real API key
+var dummyKeyProviders = map[string]bool{
+	"cliproxy": true,
+	"ollama":   true,
+	"lmstudio": true,
 }
 
 // slot wraps a Provider with rate-limit cooldown tracking.
@@ -67,6 +82,11 @@ func NewRotatingProvider(slots []SlotConfig) (*RotatingProvider, error) {
 		slots = defaultSlots
 	}
 
+	// Allow CLIPROXY_URL env to override the default base URL
+	if url := os.Getenv("CLIPROXY_URL"); url != "" {
+		providerBaseURLs["cliproxy"] = url
+	}
+
 	var built []slot
 	for _, sc := range slots {
 		baseURL, ok := providerBaseURLs[sc.Provider]
@@ -85,9 +105,15 @@ func NewRotatingProvider(slots []SlotConfig) (*RotatingProvider, error) {
 
 		apiKey := os.Getenv(envVar)
 		if apiKey == "" {
-			slog.Warn("API key not set for provider, skipping slot",
-				"provider", sc.Provider, "env_var", envVar, "model", sc.Model)
-			continue
+			if sc.Provider == "cliproxy" {
+				apiKey = "nexus-local" // Default API key for CLIProxyAPI
+			} else if dummyKeyProviders[sc.Provider] {
+				apiKey = "dummy"
+			} else {
+				slog.Warn("API key not set for provider, skipping slot",
+					"provider", sc.Provider, "env_var", envVar, "model", sc.Model)
+				continue
+			}
 		}
 
 		p := NewOpenAIProvider(sc.Provider, baseURL, apiKey, sc.Model, 60*time.Second)
@@ -200,7 +226,23 @@ func (r *RotatingProvider) Chat(ctx context.Context, messages []Message, tools [
 					"retry_after", rle.RetryAfter.Round(time.Second))
 				continue
 			}
-			// Non-rate-limit error: return immediately.
+
+			// Connection errors (provider unreachable): skip to next slot
+			errMsg := err.Error()
+			if isConnectionError(errMsg) {
+				slog.Warn("Slot unreachable, trying next",
+					"provider", s.provider.Name(),
+					"model", s.provider.GetModel(),
+					"error", errMsg)
+				// Put on 5-minute cooldown so we don't keep hitting a dead endpoint
+				r.mu.Lock()
+				s.cooldownAt = time.Now()
+				s.cooldownDur = 5 * time.Minute
+				r.mu.Unlock()
+				continue
+			}
+
+			// Other errors: return immediately
 			return nil, err
 		}
 
@@ -242,4 +284,23 @@ func (r *RotatingProvider) ListModels(ctx context.Context) ([]Model, error) {
 	}
 
 	return all, nil
+}
+
+// isConnectionError checks if an error indicates the provider is unreachable.
+func isConnectionError(msg string) bool {
+	patterns := []string{
+		"connection refused",
+		"no such host",
+		"dial tcp",
+		"connect: connection refused",
+		"i/o timeout",
+		"TLS handshake timeout",
+	}
+	lower := strings.ToLower(msg)
+	for _, p := range patterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
 }

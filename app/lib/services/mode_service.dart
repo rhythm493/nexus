@@ -53,58 +53,22 @@ class ModeService extends ChangeNotifier {
   Future<void> fetchModes(String baseUrl, {bool forceRefresh = false}) async {
     await _ensureInitialized();
 
-    // Cache for 5 minutes
-    if (!forceRefresh &&
-        _lastFetch != null &&
-        DateTime.now().difference(_lastFetch!) < const Duration(minutes: 5) &&
-        _availableModes.isNotEmpty) {
-      debugPrint('Using cached modes');
-      return;
+    if (_availableModes.isNotEmpty && !forceRefresh) return;
+
+    // Hardcoded modes — no server fetch needed
+    _availableModes = [
+      AppMode(id: 'sonos', name: 'Music', icon: 'speaker', description: 'Control speakers and play music', defaultMode: true),
+      AppMode(id: 'grocery', name: 'Grocery', icon: 'shopping_cart', description: 'Build optimized grocery carts'),
+      AppMode(id: 'websearch', name: 'Search', icon: 'search', description: 'Search the web'),
+    ];
+
+    if (_selectedModeId == null) {
+      _selectedModeId = _availableModes.firstWhere((m) => m.defaultMode, orElse: () => _availableModes.first).id;
+      await _prefs?.setString('selected_mode', _selectedModeId!);
     }
 
-    if (_isLoading) return; // Prevent duplicate requests
-
-    _isLoading = true;
-    _error = null;
+    _isLoading = false;
     notifyListeners();
-
-    try {
-      final uri = Uri.parse('$baseUrl/api/v1/modes');
-      final request = await _httpClient!.getUrl(uri);
-      final response = await request.close().timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => throw TimeoutException('Request timed out'),
-      );
-
-      if (response.statusCode == 200) {
-        final body = await response.transform(utf8.decoder).join();
-        final json = jsonDecode(body) as Map<String, dynamic>;
-
-        _availableModes = (json['modes'] as List)
-            .map((m) => AppMode.fromJson(m as Map<String, dynamic>))
-            .toList();
-
-        _lastFetch = DateTime.now();
-
-        // Set default mode if none selected
-        if (_selectedModeId == null && _availableModes.isNotEmpty) {
-          final defaultMode = _availableModes.firstWhere(
-            (m) => m.defaultMode,
-            orElse: () => _availableModes.first,
-          );
-          _selectedModeId = defaultMode.id;
-          await _prefs?.setString('selected_mode', _selectedModeId!);
-        }
-      } else {
-        _error = 'Failed to fetch modes: HTTP ${response.statusCode}';
-      }
-    } catch (e) {
-      _error = 'Failed to fetch modes: $e';
-      debugPrint(_error);
-    } finally {
-      _isLoading = false;
-      notifyListeners();
-    }
   }
 
   Future<void> selectMode(String modeId) async {

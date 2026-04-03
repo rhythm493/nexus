@@ -6,6 +6,7 @@ import 'services/discovery_service.dart';
 import 'services/location_service.dart';
 import 'services/mode_service.dart';
 import 'services/voice_service.dart';
+import 'services/cart_service.dart';
 import 'services/settings_service.dart';
 import 'screens/chat_screen.dart';
 
@@ -26,6 +27,7 @@ class NexusApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => SettingsService()),
         ChangeNotifierProvider(create: (_) => ModeService()),
         ChangeNotifierProvider(create: (_) => LocationService()),
+        ChangeNotifierProvider(create: (_) => CartService()),
       ],
       child: MaterialApp(
         title: 'Nexus',

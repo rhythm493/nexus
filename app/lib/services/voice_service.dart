@@ -8,12 +8,12 @@ import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa_onnx;
 import 'package:http/http.dart' as http;
 import 'package:archive/archive.dart';
 
-/// Service for offline speech-to-text using sherpa-onnx
+/// Service for offline speech-to-text using sherpa-onnx.
+/// Model is downloaded from our Go server (which caches it from GitHub).
 class VoiceService extends ChangeNotifier {
-  // Model files for English streaming ASR
   static const String _modelName = 'sherpa-onnx-streaming-zipformer-en-2023-06-26';
-  static const String _modelUrl =
-      'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/$_modelName.tar.bz2';
+  // Model served from our Go backend — cached on server side
+  static const String _modelEndpoint = '/api/v1/models/speech';
 
   AudioRecorder? _audioRecorder;
   sherpa_onnx.OnlineRecognizer? _recognizer;
@@ -23,34 +23,50 @@ class VoiceService extends ChangeNotifier {
   bool _isInitialized = false;
   bool _isDownloading = false;
   bool _isListening = false;
+  bool _needsDownload = false;
   String _currentText = '';
   String? _error;
   double _downloadProgress = 0.0;
+  String? _serverBaseUrl;
 
   bool get isAvailable => _isInitialized;
   bool get isDownloading => _isDownloading;
   bool get isListening => _isListening;
+  bool get needsDownload => _needsDownload;
   String get currentText => _currentText;
   String? get error => _error;
   double get downloadProgress => _downloadProgress;
 
-  /// Initialize sherpa-onnx with model download if needed
+  /// Set the server URL for model download.
+  void setServer(String baseUrl) {
+    _serverBaseUrl = baseUrl;
+  }
+
+  /// Check if model exists locally. Call on startup to set needsDownload state.
+  Future<void> checkModelStatus() async {
+    final modelDir = await _getModelDir();
+    final encoderPath = p.join(modelDir, 'encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx');
+    _needsDownload = !await File(encoderPath).exists();
+    notifyListeners();
+  }
+
+  /// Initialize sherpa-onnx (model must already be downloaded).
   Future<bool> initialize() async {
     if (_isInitialized) return true;
 
     try {
-      // Initialize bindings
       sherpa_onnx.initBindings();
 
-      // Check if model exists, download if not
       final modelDir = await _getModelDir();
       final encoderPath = p.join(modelDir, 'encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx');
 
       if (!await File(encoderPath).exists()) {
-        await _downloadModel();
+        _needsDownload = true;
+        _error = 'Speech model not downloaded yet';
+        notifyListeners();
+        return false;
       }
 
-      // Create recognizer config
       final modelConfig = sherpa_onnx.OnlineModelConfig(
         transducer: sherpa_onnx.OnlineTransducerModelConfig(
           encoder: p.join(modelDir, 'encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx'),
@@ -70,6 +86,7 @@ class VoiceService extends ChangeNotifier {
       _audioRecorder = AudioRecorder();
 
       _isInitialized = true;
+      _needsDownload = false;
       _error = null;
       notifyListeners();
       return true;
@@ -82,12 +99,21 @@ class VoiceService extends ChangeNotifier {
     }
   }
 
+  /// Use external storage so model persists across app updates.
   Future<String> _getModelDir() async {
-    final appDir = await getApplicationSupportDirectory();
+    // getApplicationDocumentsDirectory persists across updates (unlike support dir)
+    final appDir = await getApplicationDocumentsDirectory();
     return p.join(appDir.path, _modelName);
   }
 
-  Future<void> _downloadModel() async {
+  /// Download model from our Go server. Must be called explicitly after user confirms.
+  Future<bool> downloadModel() async {
+    if (_serverBaseUrl == null) {
+      _error = 'Not connected to server';
+      notifyListeners();
+      return false;
+    }
+
     _isDownloading = true;
     _downloadProgress = 0.0;
     _error = 'Downloading speech model (~70MB)...';
@@ -97,9 +123,13 @@ class VoiceService extends ChangeNotifier {
       final modelDir = await _getModelDir();
       await Directory(modelDir).create(recursive: true);
 
-      // Download tar.bz2 file
-      debugPrint('Downloading model from $_modelUrl');
-      final response = await http.Client().send(http.Request('GET', Uri.parse(_modelUrl)));
+      final url = '$_serverBaseUrl$_modelEndpoint';
+      debugPrint('Downloading model from $url');
+      final response = await http.Client().send(http.Request('GET', Uri.parse(url)));
+
+      if (response.statusCode != 200) {
+        throw Exception('Server returned ${response.statusCode}');
+      }
 
       final contentLength = response.contentLength ?? 0;
       final bytes = <int>[];
@@ -124,7 +154,6 @@ class VoiceService extends ChangeNotifier {
 
       for (final file in archive) {
         if (file.isFile) {
-          // Extract to model dir, flattening the archive structure
           final filename = p.basename(file.name);
           final outFile = File(p.join(modelDir, filename));
           await outFile.writeAsBytes(file.content as List<int>);
@@ -133,10 +162,16 @@ class VoiceService extends ChangeNotifier {
       }
 
       _downloadProgress = 1.0;
+      _needsDownload = false;
+      _error = null;
       debugPrint('Model downloaded and extracted to $modelDir');
+      notifyListeners();
+      return true;
     } catch (e) {
       _error = 'Download failed: $e';
-      rethrow;
+      notifyListeners();
+      debugPrint('Model download error: $e');
+      return false;
     } finally {
       _isDownloading = false;
       notifyListeners();
@@ -161,7 +196,6 @@ class VoiceService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // Check permission
       if (!await _audioRecorder!.hasPermission()) {
         _error = 'Microphone permission denied';
         _isListening = false;
@@ -169,46 +203,36 @@ class VoiceService extends ChangeNotifier {
         return;
       }
 
-      // Cancel any existing subscription before creating a new one
       await _audioSubscription?.cancel();
       _audioSubscription = null;
 
-      // Create new stream for this session
       _stream = _recognizer!.createStream();
 
-      // Configure audio recording
       const config = RecordConfig(
         encoder: AudioEncoder.pcm16bits,
         sampleRate: 16000,
         numChannels: 1,
       );
 
-      // Start recording stream
       final audioStream = await _audioRecorder!.startStream(config);
 
       _audioSubscription = audioStream.listen(
         (data) {
           if (!_isListening || _stream == null) return;
 
-          // Convert bytes to float32 samples
           final samples = _convertBytesToFloat32(Uint8List.fromList(data));
-
-          // Feed to recognizer
           _stream!.acceptWaveform(samples: samples, sampleRate: 16000);
 
-          // Decode while ready
           while (_recognizer!.isReady(_stream!)) {
             _recognizer!.decode(_stream!);
           }
 
-          // Get current result — only notify when text actually changes
           final result = _recognizer!.getResult(_stream!);
           if (result.text.isNotEmpty && result.text != _currentText) {
             _currentText = result.text;
             notifyListeners();
           }
 
-          // Check for endpoint (pause in speech)
           if (_recognizer!.isEndpoint(_stream!)) {
             if (_currentText.isNotEmpty) {
               onResult(_currentText);
@@ -242,7 +266,6 @@ class VoiceService extends ChangeNotifier {
     return values;
   }
 
-  /// Stop listening and return final result
   Future<void> stopListening() async {
     if (!_isListening) return;
 
@@ -250,17 +273,11 @@ class VoiceService extends ChangeNotifier {
     _audioSubscription = null;
     await _audioRecorder?.stop();
 
-    // Get final result before stopping
-    if (_stream != null && _currentText.isNotEmpty) {
-      // Result already sent via callback
-    }
-
     _stream = null;
     _isListening = false;
     notifyListeners();
   }
 
-  /// Cancel listening without returning result
   Future<void> cancelListening() async {
     if (!_isListening) return;
 

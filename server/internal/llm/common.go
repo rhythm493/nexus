@@ -47,37 +47,6 @@ type Response struct {
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
-// ChatRequest is the request body for the chat API (OpenAI-compatible format)
-type ChatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Tools       []Tool    `json:"tools,omitempty"`
-	ToolChoice  string    `json:"tool_choice,omitempty"`
-	Temperature float64   `json:"temperature,omitempty"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-}
-
-// ChatResponse is the response from the chat API (OpenAI-compatible format)
-type ChatResponse struct {
-	ID      string    `json:"id"`
-	Choices []Choice  `json:"choices"`
-	Error   *APIError `json:"error,omitempty"`
-}
-
-// Choice represents a response choice
-type Choice struct {
-	Index        int     `json:"index"`
-	Message      Message `json:"message"`
-	FinishReason string  `json:"finish_reason"`
-}
-
-// APIError represents an API error
-type APIError struct {
-	Message string `json:"message"`
-	Type    string `json:"type"`
-	Code    string `json:"code"`
-}
-
 // ConvertMCPTools converts MCP tools to LLM tool format
 func ConvertMCPTools(mcpTools []mcp.Tool) []Tool {
 	var tools []Tool

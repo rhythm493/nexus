@@ -1,26 +1,27 @@
 # Note: 'version' key is omitted; Compose v2+ infers the schema automatically.
 
 services:
-  # QuickCom Node.js server for grocery shopping integration
+  # QuickCom grocery price comparison service (REST API)
   # NOTE: QuickCom must be located at ../QuickCom relative to this file
-  # Full path: /home/rhythm493/Projects/Local/QuickCom
   quickcom:
     build:
       context: ../QuickCom
       dockerfile: Dockerfile
     container_name: quickcom
     ports:
-      - "5000:10000"  # WebSocket API
-      - "5900:5900"   # VNC (for debugging Puppeteer)
+      - "5000:10000"  # REST API
     environment:
       - NODE_ENV=production
       - PORT=10000
       - PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
       - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-      - DEBUG=puppeteer:*
+      - DEFAULT_LAT=${DEFAULT_LAT:-18.5204}
+      - DEFAULT_LON=${DEFAULT_LON:-73.8567}
+      - DEFAULT_LOCATION=${DEFAULT_LOCATION:-Kothrud, Pune}
     volumes:
-      # Persist browser cache
-      - quickcom-cache:/opt/render/.cache/puppeteer
+      # Persist cache database and sessions
+      - quickcom-data:/app/data
+      - quickcom-sessions:/app/.sessions
     networks:
       - nexus-network
     restart: unless-stopped
@@ -29,7 +30,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s
     deploy:
       resources:
         limits:
@@ -56,6 +57,7 @@ services:
       - RADIO_STREAM_PORT=8080
       - LIBRARY_DATA_DIR=/app/data/library
       - LIBRARY_DATABASE_PATH=/app/data/library.db
+      - QUICKCOM_URL=http://quickcom:10000
     volumes:
       # Persist library database and audio files
       - library-data:/app/data/library
@@ -109,7 +111,9 @@ networks:
 
 volumes:
   # QuickCom volumes
-  quickcom-cache:
+  quickcom-data:
+    driver: local
+  quickcom-sessions:
     driver: local
 
   # Nexus volumes
