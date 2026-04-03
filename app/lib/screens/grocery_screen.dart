@@ -6,7 +6,6 @@ import '../models/message.dart';
 import '../models/cart_full_state.dart';
 import '../services/api_service.dart';
 import '../services/cart_service.dart';
-import '../services/voice_service.dart';
 import '../widgets/cart_product_card.dart';
 import '../widgets/inline_search.dart';
 import '../widgets/agent_chip.dart';
@@ -57,7 +56,8 @@ class _GroceryScreenState extends State<GroceryScreen> {
     await cartService.addProduct(baseUrl, convId, query, provider);
     if (mounted) {
       _addSystemMessage('Added $query');
-      _sendHiddenMessage('I added $query from $provider to the cart. Use cart_view to see the updated cart.');
+      _sendHiddenMessage(
+          'I added $query from $provider to the cart. Use cart_view to see the updated cart.');
     }
   }
 
@@ -163,9 +163,12 @@ class _GroceryScreenState extends State<GroceryScreen> {
       _streamThrottleTimer?.cancel();
       setState(() {
         if (assistantResponse.isNotEmpty) {
-          if (_messages.isNotEmpty && _messages.last.isAssistant) _messages.removeLast();
+          if (_messages.isNotEmpty && _messages.last.isAssistant) {
+            _messages.removeLast();
+          }
           // Short responses → agent chip instead of chat bubble
-          if (assistantResponse.length < 100 && !assistantResponse.contains('\n')) {
+          if (assistantResponse.length < 100 &&
+              !assistantResponse.contains('\n')) {
             _chips.add(assistantResponse);
           } else {
             _messages.add(Message.assistant(assistantResponse));
@@ -188,7 +191,9 @@ class _GroceryScreenState extends State<GroceryScreen> {
           _streamThrottleTimer = Timer(const Duration(milliseconds: 100), () {
             if (mounted) {
               setState(() {
-                if (_messages.isNotEmpty && _messages.last.isAssistant) _messages.removeLast();
+                if (_messages.isNotEmpty && _messages.last.isAssistant) {
+                  _messages.removeLast();
+                }
                 _messages.add(Message.assistant(text));
               });
               _scrollChat();
@@ -202,18 +207,24 @@ class _GroceryScreenState extends State<GroceryScreen> {
         _scrollChat();
         break;
       case 'tool_call':
-        setState(() => _messages.add(Message.toolCall(event.name ?? '', event.args)));
+        setState(() =>
+            _messages.add(Message.toolCall(event.name ?? '', event.args)));
         _scrollChat();
         break;
       case 'tool_result':
-        setState(() => _messages.add(Message.toolResult(event.name ?? '', event.result)));
+        setState(() =>
+            _messages.add(Message.toolResult(event.name ?? '', event.result)));
         _scrollChat();
         break;
       case 'cart_update':
-        if (mounted) context.read<CartService>().updateFromSSEFull(event.result);
+        if (mounted) {
+          context.read<CartService>().updateFromSSEFull(event.result);
+        }
         break;
       case 'cart_optimized':
-        if (mounted) context.read<CartService>().updateOptimization(event.result);
+        if (mounted) {
+          context.read<CartService>().updateOptimization(event.result);
+        }
         break;
       case 'error':
         setState(() {
@@ -326,13 +337,15 @@ class _GroceryScreenState extends State<GroceryScreen> {
                       children: [
                         ...cart.items.map((item) => CartProductCard(
                               item: item,
-                              onSwap: (provider) => _handleSwap(item.query, provider),
+                              onSwap: (provider) =>
+                                  _handleSwap(item.query, provider),
                               onRemove: () => _handleRemove(item.query),
                             )),
                         // Agent chips
                         ..._chips.asMap().entries.map((e) => AgentChip(
                               text: e.value,
-                              onDismiss: () => setState(() => _chips.removeAt(e.key)),
+                              onDismiss: () =>
+                                  setState(() => _chips.removeAt(e.key)),
                             )),
                         // Optimization banner
                         if (cart.optimization != null)
@@ -358,9 +371,12 @@ class _GroceryScreenState extends State<GroceryScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.shopping_cart_outlined, size: 48, color: cs.onSurface.withValues(alpha: 0.2)),
+          Icon(Icons.shopping_cart_outlined,
+              size: 48, color: cs.onSurface.withValues(alpha: 0.2)),
           const SizedBox(height: 12),
-          Text('Search above or ask the assistant', style: TextStyle(color: cs.onSurface.withValues(alpha: 0.4), fontSize: 13)),
+          Text('Search above or ask the assistant',
+              style: TextStyle(
+                  color: cs.onSurface.withValues(alpha: 0.4), fontSize: 13)),
         ],
       ),
     );
@@ -374,24 +390,28 @@ class _GroceryScreenState extends State<GroceryScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
         color: cs.surfaceContainerLow,
-        border: Border(top: BorderSide(color: cs.outline.withValues(alpha: 0.15))),
+        border:
+            Border(top: BorderSide(color: cs.outline.withValues(alpha: 0.15))),
       ),
       child: Row(
         children: [
           Text(
             'Total: ${CartProduct.formatPaise(total)}',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: cs.onSurface),
+            style: TextStyle(
+                fontSize: 14, fontWeight: FontWeight.w600, color: cs.onSurface),
           ),
           Text(
             ' \u00b7 ${cart.itemCount} item${cart.itemCount == 1 ? '' : 's'}',
-            style: TextStyle(fontSize: 12, color: cs.onSurface.withValues(alpha: 0.5)),
+            style: TextStyle(
+                fontSize: 12, color: cs.onSurface.withValues(alpha: 0.5)),
           ),
           const Spacer(),
           if (!cart.isOptimized)
             FilledButton.tonal(
               onPressed: _handleOptimize,
               style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 minimumSize: Size.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
@@ -426,11 +446,15 @@ class _GroceryScreenState extends State<GroceryScreen> {
           children: [
             Row(
               children: [
-                Icon(Icons.savings_outlined, size: 16, color: Colors.green[400]),
+                Icon(Icons.savings_outlined,
+                    size: 16, color: Colors.green[400]),
                 const SizedBox(width: 6),
                 Text(
                   'Split saves ${CartProduct.formatPaise(opt.splitSavings)} (${opt.splitSavingsPct.toInt()}%)',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.green[400]),
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.green[400]),
                 ),
               ],
             ),
@@ -438,7 +462,9 @@ class _GroceryScreenState extends State<GroceryScreen> {
                   padding: const EdgeInsets.only(left: 22, top: 2),
                   child: Text(
                     '${_shortProvider(pc.provider)}: ${pc.itemCount} items \u2014 ${CartProduct.formatPaise(pc.totalPaise)}',
-                    style: TextStyle(fontSize: 11, color: cs.onSurface.withValues(alpha: 0.6)),
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: cs.onSurface.withValues(alpha: 0.6)),
                   ),
                 )),
           ],
@@ -458,7 +484,8 @@ class _GroceryScreenState extends State<GroceryScreen> {
           const SizedBox(width: 6),
           Text(
             'Best: All from ${_shortProvider(opt.singleBest.provider)} \u2014 ${CartProduct.formatPaise(opt.singleBest.totalPaise)}',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: cs.primary),
+            style: TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w500, color: cs.primary),
           ),
         ],
       ),
@@ -488,9 +515,12 @@ class _GroceryScreenState extends State<GroceryScreen> {
                     _messages[index + 1].isToolResult &&
                     _messages[index + 1].toolName == msg.toolName;
 
-                if (msg.isToolResult && index > 0 && _messages[index - 1].isToolCall &&
+                if (msg.isToolResult &&
+                    index > 0 &&
+                    _messages[index - 1].isToolCall &&
                     _messages[index - 1].toolName == msg.toolName) {
-                  return const SizedBox.shrink(); // Hidden — merged into tool_call above
+                  return const SizedBox
+                      .shrink(); // Hidden — merged into tool_call above
                 }
 
                 return ChatBubble(
@@ -508,9 +538,16 @@ class _GroceryScreenState extends State<GroceryScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Row(
               children: [
-                SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary)),
+                SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: cs.primary)),
                 const SizedBox(width: 8),
-                Text('Thinking...', style: TextStyle(fontSize: 11, color: cs.onSurface.withValues(alpha: 0.5))),
+                Text('Thinking...',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: cs.onSurface.withValues(alpha: 0.5))),
               ],
             ),
           ),
@@ -520,7 +557,8 @@ class _GroceryScreenState extends State<GroceryScreen> {
           padding: const EdgeInsets.all(6),
           decoration: BoxDecoration(
             color: cs.surface,
-            border: Border(top: BorderSide(color: cs.outline.withValues(alpha: 0.1))),
+            border: Border(
+                top: BorderSide(color: cs.outline.withValues(alpha: 0.1))),
           ),
           child: SafeArea(
             child: Row(
@@ -532,9 +570,12 @@ class _GroceryScreenState extends State<GroceryScreen> {
                     controller: _textController,
                     decoration: InputDecoration(
                       hintText: 'Ask the assistant...',
-                      hintStyle: TextStyle(fontSize: 13, color: cs.onSurface.withValues(alpha: 0.4)),
+                      hintStyle: TextStyle(
+                          fontSize: 13,
+                          color: cs.onSurface.withValues(alpha: 0.4)),
                       border: const OutlineInputBorder(),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
                       isDense: true,
                     ),
                     style: const TextStyle(fontSize: 13),
@@ -566,7 +607,9 @@ class _GroceryScreenState extends State<GroceryScreen> {
           Expanded(child: Divider(color: cs.outline.withValues(alpha: 0.15))),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Text(text, style: TextStyle(fontSize: 10, color: cs.onSurface.withValues(alpha: 0.4))),
+            child: Text(text,
+                style: TextStyle(
+                    fontSize: 10, color: cs.onSurface.withValues(alpha: 0.4))),
           ),
           Expanded(child: Divider(color: cs.outline.withValues(alpha: 0.15))),
         ],
@@ -575,6 +618,15 @@ class _GroceryScreenState extends State<GroceryScreen> {
   }
 
   String _shortProvider(String p) {
-    switch (p) { case 'blinkit': return 'Blinkit'; case 'instamart': return 'Instamart'; case 'zepto': return 'Zepto'; default: return p; }
+    switch (p) {
+      case 'blinkit':
+        return 'Blinkit';
+      case 'instamart':
+        return 'Instamart';
+      case 'zepto':
+        return 'Zepto';
+      default:
+        return p;
+    }
   }
 }

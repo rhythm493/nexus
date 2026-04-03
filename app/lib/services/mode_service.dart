@@ -13,7 +13,6 @@ class ModeService extends ChangeNotifier {
   List<AppMode> _availableModes = [];
   bool _isLoading = false;
   String? _error;
-  DateTime? _lastFetch;
 
   // Getters
   String? get selectedModeId => _selectedModeId;
@@ -57,13 +56,28 @@ class ModeService extends ChangeNotifier {
 
     // Hardcoded modes — no server fetch needed
     _availableModes = [
-      AppMode(id: 'sonos', name: 'Music', icon: 'speaker', description: 'Control speakers and play music', defaultMode: true),
-      AppMode(id: 'grocery', name: 'Grocery', icon: 'shopping_cart', description: 'Build optimized grocery carts'),
-      AppMode(id: 'websearch', name: 'Search', icon: 'search', description: 'Search the web'),
+      AppMode(
+          id: 'sonos',
+          name: 'Music',
+          icon: 'speaker',
+          description: 'Control speakers and play music',
+          defaultMode: true),
+      AppMode(
+          id: 'grocery',
+          name: 'Grocery',
+          icon: 'shopping_cart',
+          description: 'Build optimized grocery carts'),
+      AppMode(
+          id: 'websearch',
+          name: 'Search',
+          icon: 'search',
+          description: 'Search the web'),
     ];
 
     if (_selectedModeId == null) {
-      _selectedModeId = _availableModes.firstWhere((m) => m.defaultMode, orElse: () => _availableModes.first).id;
+      _selectedModeId = _availableModes
+          .firstWhere((m) => m.defaultMode, orElse: () => _availableModes.first)
+          .id;
       await _prefs?.setString('selected_mode', _selectedModeId!);
     }
 
@@ -100,15 +114,16 @@ class ModeService extends ChangeNotifier {
       request.write(jsonEncode(requestBody));
 
       final response = await request.close().timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => throw TimeoutException('Request timed out'),
-      );
+            const Duration(seconds: 10),
+            onTimeout: () => throw TimeoutException('Request timed out'),
+          );
       final statusCode = response.statusCode;
       // Drain the response body to free resources
       await response.drain<void>();
 
       if (statusCode == 200) {
-        debugPrint('Location set on backend: $locationName ($latitude, $longitude)');
+        debugPrint(
+            'Location set on backend: $locationName ($latitude, $longitude)');
         return true;
       } else {
         debugPrint('Failed to set location on backend: $statusCode');
@@ -148,8 +163,10 @@ class AppMode {
       id: (json['ID'] ?? json['id']) as String,
       name: (json['Name'] ?? json['name']) as String,
       icon: (json['Icon'] ?? json['icon'] as String?) ?? 'help',
-      description: (json['Description'] ?? json['description'] as String?) ?? '',
-      defaultMode: (json['DefaultMode'] ?? json['default_mode']) as bool? ?? false,
+      description:
+          (json['Description'] ?? json['description'] as String?) ?? '',
+      defaultMode:
+          (json['DefaultMode'] ?? json['default_mode']) as bool? ?? false,
     );
   }
 }

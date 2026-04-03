@@ -55,7 +55,7 @@ class _LLMSettingsSectionState extends State<LLMSettingsSection> {
 
                 // Provider dropdown
                 DropdownButtonFormField<String>(
-                  value: settings.selectedProvider,
+                  initialValue: settings.selectedProvider,
                   decoration: const InputDecoration(
                     labelText: 'Provider',
                     border: OutlineInputBorder(),
@@ -81,7 +81,7 @@ class _LLMSettingsSectionState extends State<LLMSettingsSection> {
                 // Model dropdown
                 if (settings.selectedProvider != null) ...[
                   DropdownButtonFormField<String>(
-                    value: settings.selectedModel,
+                    initialValue: settings.selectedModel,
                     decoration: const InputDecoration(
                       labelText: 'Model',
                       border: OutlineInputBorder(),
