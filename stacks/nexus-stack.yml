@@ -15,6 +15,7 @@ services:
       - YOUTUBE_ENABLED=true
       - RADIO_LIQUIDSOAP_PATH=liquidsoap
       - RADIO_STREAM_PORT=8080
+      - CERTS_DIR=/app/certs
       - LIBRARY_DATA_DIR=/app/data/library
       - LIBRARY_DATABASE_PATH=/app/data/library.db
     volumes:
