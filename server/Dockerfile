@@ -16,7 +16,7 @@ RUN go mod download
 COPY . .
 
 # Build the application
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o nexus ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o nexus ./cmd/server
 
 # Stage 2: Runtime image
 FROM debian:bookworm-slim
@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
     python3 \
+    python3-venv \
     python3-pip \
     nodejs \
     npm \
