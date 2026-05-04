@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   nexus:
-    image: ghcr.io/rhythm493/pocket-assistant/nexus:latest
+    image: ghcr.io/rhythm493/nexus:main
     container_name: nexus
     ports:
       - "8443:8443"
