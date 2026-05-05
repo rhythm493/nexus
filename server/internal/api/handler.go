@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,7 +31,6 @@ type Server struct {
 	llmProvider   llm.Provider
 	mcpHost       *mcp.Host
 	modeManager   *mode.Manager
-	tlsConfig     *tls.Config
 	httpServer    *http.Server
 	conversations sync.Map // map[string]*Conversation
 	youtube       *youtube.Service
@@ -90,13 +88,12 @@ type ToolsResponse struct {
 }
 
 // NewServer creates a new API server
-func NewServer(cfg *config.Config, llmProvider llm.Provider, mcpHost *mcp.Host, modeManager *mode.Manager, tlsConfig *tls.Config, yt *youtube.Service, radioEngine *radio.Engine, radioTools *radio.ToolHandlers, cartManager *cart.Manager, cartTools *cart.ToolHandlers, quickcomClient *quickcom.Client) *Server {
+func NewServer(cfg *config.Config, llmProvider llm.Provider, mcpHost *mcp.Host, modeManager *mode.Manager, yt *youtube.Service, radioEngine *radio.Engine, radioTools *radio.ToolHandlers, cartManager *cart.Manager, cartTools *cart.ToolHandlers, quickcomClient *quickcom.Client) *Server {
 	return &Server{
 		config:         cfg,
 		llmProvider:    llmProvider,
 		mcpHost:        mcpHost,
 		modeManager:    modeManager,
-		tlsConfig:      tlsConfig,
 		youtube:        yt,
 		radioEngine:    radioEngine,
 		radioTools:     radioTools,
@@ -148,7 +145,7 @@ func (s *Server) startConversationCleanup() {
 	}()
 }
 
-// Start starts the HTTPS server and HTTP stream server
+// Start starts the HTTP server
 func (s *Server) Start() error {
 	s.startConversationCleanup()
 
@@ -202,12 +199,11 @@ func (s *Server) Start() error {
 	handler := s.logMiddleware(mux)
 
 	s.httpServer = &http.Server{
-		Addr:      fmt.Sprintf(":%d", s.config.Port),
-		Handler:   handler,
-		TLSConfig: s.tlsConfig,
+		Addr:    fmt.Sprintf(":%d", s.config.Port),
+		Handler: handler,
 	}
 
-	return s.httpServer.ListenAndServeTLS("", "")
+	return s.httpServer.ListenAndServe()
 }
 
 // Shutdown gracefully shuts down the server

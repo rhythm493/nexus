@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  nexus:
+    image: ghcr.io/rhythm493/nexus:main
+    container_name: nexus
+    restart: unless-stopped
+    dns:
+      - 1.1.1.1
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER:-groq}
+      - LLM_MODEL=${LLM_MODEL:-llama-3.3-70b-versatile}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - nexus_certs-data:/app/certs
+      - nexus_library-data:/app/library
+      - nexus_mcp-data:/app/mcp-servers
+    networks:
+      - traefik_proxy
+    labels:
+      # Enable Traefik
+      - "traefik.enable=true"
+      
+      # HTTP router (port 80) - redirect to HTTPS
+      - "traefik.http.routers.nexus-web.rule=Host(`pocket-assistant-nexus.duckdns.org`)"
+      - "traefik.http.routers.nexus-web.entrypoints=web"
+      - "traefik.http.routers.nexus-web.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      
+      # HTTPS router (port 443)
+      - "traefik.http.routers.nexus.rule=Host(`pocket-assistant-nexus.duckdns.org`)"
+      - "traefik.http.routers.nexus.entrypoints=websecure"
+      - "traefik.http.routers.nexus.tls.certresolver=letsencrypt"
+      
+      # Service configuration
+      - "traefik.http.services.nexus.loadbalancer.server.port=8443"
+      
+      # Health check (optional)
+      - "traefik.http.services.nexus.loadbalancer.healthcheck.path=/api/v1/health"
+      - "traefik.http.services.nexus.loadbalancer.healthcheck.interval=30s"
+
+volumes:
+  nexus_certs-data:
+  nexus_library-data:
+  nexus_mcp-data:
+
+networks:
+  traefik_proxy:
+    external: true

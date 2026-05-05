@@ -1,129 +1,41 @@
-# Note: 'version' key is omitted; Compose v2+ infers the schema automatically.
+version: '3.8'
 
 services:
-  # QuickCom grocery price comparison service (REST API)
-  # NOTE: QuickCom must be located at ../QuickCom relative to this file
-  quickcom:
-    build:
-      context: ../QuickCom
-      dockerfile: Dockerfile
-    container_name: quickcom
-    ports:
-      - "5000:10000"  # REST API
-    environment:
-      - NODE_ENV=production
-      - PORT=10000
-      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
-      - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-      - DEFAULT_LAT=${DEFAULT_LAT:-18.5204}
-      - DEFAULT_LON=${DEFAULT_LON:-73.8567}
-      - DEFAULT_LOCATION=${DEFAULT_LOCATION:-Kothrud, Pune}
-    volumes:
-      # Persist cache database and sessions
-      - quickcom-data:/app/data
-      - quickcom-sessions:/app/.sessions
-    networks:
-      - nexus-network
+  # Caddy reverse proxy with automatic HTTPS
+  caddy:
+    image: caddy:latest
+    container_name: caddy
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:10000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-        reservations:
-          memory: 512M
-
-  # Nexus Go server
-  nexus:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
-    container_name: nexus
     ports:
-      - "8443:8443"  # HTTPS API
-      - "8080:8080"  # HTTP radio stream
-    environment:
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - GROQ_API_KEY=${GROQ_API_KEY}
-      - PORT=8443
-      - RADIO_ENABLED=true
-      - YOUTUBE_ENABLED=true
-      - RADIO_LIQUIDSOAP_PATH=liquidsoap
-      - RADIO_STREAM_PORT=8080
-      - LIBRARY_DATA_DIR=/app/data/library
-      - LIBRARY_DATABASE_PATH=/app/data/library.db
-      - QUICKCOM_URL=http://quickcom:10000
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # For HTTP/3 support
     volumes:
-      # Persist library database and audio files
-      - library-data:/app/data/library
-      - library-db:/app/data
-      # Persist downloaded binaries (yt-dlp)
-      - bin-data:/app/data/bin
-      # Persist TLS certificates
-      - certs-data:/app/certs
-      # Persist Liquidsoap streams
-      - streams-data:/app/streams
-      # Optional: mount custom config
-      - ./server/config/config.yaml:/app/config/config.yaml:ro
-      # Optional: mount MCP servers directory
-      - ./mcp-repos:/app/mcp-repos:ro
-    networks:
-      - nexus-network
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
     depends_on:
-      quickcom:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-k", "-f", "https://localhost:8443/api/v1/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-        reservations:
-          memory: 256M
+      - nexus
 
-  # mDNS reflector for Docker networks (optional, for service discovery)
-  # TODO: Pin to a specific digest once a stable tag is available
-  mdns-reflector:
-    image: flungo/avahi:latest
-    container_name: mdns-reflector
-    network_mode: host
+  # Nexus server (HTTP only, Caddy handles HTTPS)
+  nexus:
+    image: ghcr.io/rhythm493/nexus:main
+    container_name: nexus
+    restart: unless-stopped
+    ports:
+      - "8080:8443"  # Internal HTTP port mapped from container's default 8443
     environment:
-      - REFLECTOR_ENABLE_REFLECTOR=yes
-    restart: unless-stopped
-    # Note: This requires host network mode to work properly
-
-networks:
-  nexus-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.28.0.0/16
+      - SERVER_PORT=8443  # Keep internal port, but it's now HTTP not HTTPS
+    env_file:
+      - .env
+    volumes:
+      - nexus_certs-data:/app/certs
+      - nexus_library-data:/app/library
+      - nexus_mcp-data:/app/mcp-servers
 
 volumes:
-  # QuickCom volumes
-  quickcom-data:
-    driver: local
-  quickcom-sessions:
-    driver: local
-
-  # Nexus volumes
-  library-data:
-    driver: local
-  library-db:
-    driver: local
-  bin-data:
-    driver: local
-  certs-data:
-    driver: local
-  streams-data:
-    driver: local
+  caddy_data:
+  caddy_config:
+  nexus_certs-data:
+  nexus_library-data:
+  nexus_mcp-data:

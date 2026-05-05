@@ -89,3 +89,4 @@ server/streams/
 video/node_modules/
 video/out/
 video/.cache/
+DEPLOYMENT_LOCAL.md

@@ -21,7 +21,6 @@ import (
 	"github.com/rhythm493/pocket-assistant/server/internal/mode"
 	"github.com/rhythm493/pocket-assistant/server/internal/quickcom"
 	"github.com/rhythm493/pocket-assistant/server/internal/radio"
-	"github.com/rhythm493/pocket-assistant/server/internal/tls"
 	"github.com/rhythm493/pocket-assistant/server/internal/websearch"
 	"github.com/rhythm493/pocket-assistant/server/internal/youtube"
 )
@@ -137,13 +136,6 @@ func main() {
 		slog.Info("Web search client initialized")
 	}
 
-	// Load TLS configuration
-	tlsConfig, err := tls.LoadServerConfig(cfg.CertsDir)
-	if err != nil {
-		slog.Error("Failed to load TLS config", "error", err)
-		os.Exit(1)
-	}
-
 	// Initialize library
 	var lib *library.Library
 	lib, err = library.New(cfg.Library.DatabasePath)
@@ -238,7 +230,7 @@ func main() {
 		quickcomClient = quickcomBridge.Client()
 	}
 
-	server := api.NewServer(cfg, llmProvider, mcpHost, modeManager, tlsConfig, ytService, radioEngine, radioTools, cartManager, cartTools, quickcomClient)
+	server := api.NewServer(cfg, llmProvider, mcpHost, modeManager, ytService, radioEngine, radioTools, cartManager, cartTools, quickcomClient)
 
 	// Start mDNS advertisement
 	mdnsServer, err := mdns.Advertise(cfg.ServiceName, cfg.Port)
