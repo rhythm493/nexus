@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -102,14 +103,58 @@ func modelsFromSDK(list openai.ModelsList) []Model {
 	return out
 }
 
+// extractErrorMessage tries to extract a human-readable error message from a
+// raw API response body. Non-OpenAI providers (e.g. Gemini) can return errors
+// in formats that the go-openai SDK cannot parse (e.g. JSON arrays, Google RPC
+// style), causing confusing "cannot unmarshal array" wrapping errors.
+func extractErrorMessage(body []byte) string {
+	// Try OpenAI format: {"error": {"message": "..."}}
+	var openAIErr struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &openAIErr) == nil && openAIErr.Error.Message != "" {
+		return openAIErr.Error.Message
+	}
+
+	// Try Gemini array format: [{"error": {"message": "..."}}]
+	var arr []json.RawMessage
+	if json.Unmarshal(body, &arr) == nil && len(arr) > 0 {
+		var elemErr struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(arr[0], &elemErr) == nil && elemErr.Error.Message != "" {
+			return elemErr.Error.Message
+		}
+	}
+
+	// Try Google RPC format: {"error": {"message": "...", "status": "...", "details": [...]}}
+	var googleErr struct {
+		Error struct {
+			Message string `json:"message"`
+			Status  string `json:"status"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &googleErr) == nil && googleErr.Error.Message != "" {
+		msg := googleErr.Error.Message
+		if googleErr.Error.Status != "" {
+			msg += " (" + googleErr.Error.Status + ")"
+		}
+		return msg
+	}
+
+	return ""
+}
+
 // convertSDKError converts SDK errors to our error types.
 // Maps HTTP 429 to RateLimitError for the rotating provider.
 func convertSDKError(err error) error {
 	var apiErr *openai.APIError
 	if errors.As(err, &apiErr) {
 		if apiErr.HTTPStatusCode == http.StatusTooManyRequests {
-			// SDK doesn't expose Retry-After header; default to 60s.
-			// The rotating provider will try the next slot immediately.
 			return &RateLimitError{
 				RetryAfter: parseRetryAfter(""),
 				Message:    apiErr.Message,
@@ -125,6 +170,10 @@ func convertSDKError(err error) error {
 				RetryAfter: parseRetryAfter(""),
 				Message:    reqErr.Error(),
 			}
+		}
+		msg := extractErrorMessage(reqErr.Body)
+		if msg != "" {
+			return fmt.Errorf("API error (%d): %s", reqErr.HTTPStatusCode, msg)
 		}
 		return fmt.Errorf("request error (%d): %s", reqErr.HTTPStatusCode, reqErr.Error())
 	}
