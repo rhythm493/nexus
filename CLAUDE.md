@@ -35,19 +35,14 @@ Voice-controlled agentic AI assistant connecting phone to PC via LAN. Rotating L
 
 ## Quick Start
 
-### Option 1: Docker (Recommended for Production)
+### Option 1: Docker (Traefik stack — Production)
 
 ```bash
-# 1. Setup and start all services
-./docker-start.sh
-
-# 2. Run app on phone
-cd app && flutter run
-
-# 3. In app: Settings > Manual > Enter PC IP:8443
+# Start Traefik reverse proxy + Nexus
+cd stacks
+docker compose -f traefik-stack.yml up -d
+docker compose -f nexus-stack-traefik.yml up -d
 ```
-
-See [README.docker.md](README.docker.md) for full Docker documentation.
 
 ### Option 2: Local Development
 
@@ -499,43 +494,17 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 - `provider: ^6.1.1` - State management
 - `dio: ^5.4.0` - HTTP client
 
-## Docker Deployment
+## Docker Deployment (Traefik)
 
-Full Docker support with docker-compose orchestration:
+Deployment uses two stack files in `stacks/`:
 
-### Services
-- **nexus**: Go server with Liquidsoap, yt-dlp, MCP
-- **quickcom**: Node.js server with Puppeteer for grocery shopping
-- **mdns-reflector**: Optional mDNS service discovery (requires host networking)
+- `stacks/traefik-stack.yml` — Traefik reverse proxy (port 80/443, Let's Encrypt)
+- `stacks/nexus-stack-traefik.yml` — Nexus behind Traefik with auto-HTTPS
 
-### Features
-- Multi-stage builds for optimized images
-- Persistent volumes for library, database, and certs
-- Health checks and auto-restart
-- Resource limits (nexus: 256MB-1GB, quickcom: 512MB-2GB)
-- Production-ready with Nginx reverse proxy support
-
-### Files
-- `docker-compose.yml` - Service orchestration
-- `server/Dockerfile` - Go server image
-- `../QuickCom/Dockerfile` - Node.js server image (already existed)
-- `.env.example` - Environment variables template
-- `docker-start.sh` - Quick start script
-- `README.docker.md` - Comprehensive Docker guide
-
-### Quick Commands
 ```bash
-# Start everything
-./docker-start.sh
-
-# View logs
-docker-compose logs -f
-
-# Stop services
-docker-compose down
-
-# Rebuild after changes
-docker-compose build && docker-compose up -d
+cd stacks
+docker compose -f traefik-stack.yml up -d
+docker compose -f nexus-stack-traefik.yml up -d
 ```
 
 ## Grocery System Architecture

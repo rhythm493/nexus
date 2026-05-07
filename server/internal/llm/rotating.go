@@ -20,16 +20,21 @@ type SlotConfig struct {
 // defaultSlots is the priority-ordered list of provider+model pairs used when
 // no custom slots are supplied to NewRotatingProvider.
 var defaultSlots = []SlotConfig{
-	{Provider: "gemini", Model: "gemini-2.5-flash"},         // Direct Gemini API (strong tool calling, free tier)
-	{Provider: "cliproxy", Model: "gemini-3-flash-preview"}, // Gemini via CLIProxyAPI (OAuth fallback)
+	// Gemini tier (direct API, free models only)
+	{Provider: "gemini", Model: "gemini-2.5-flash"},
+	{Provider: "gemini", Model: "gemini-2.5-flash-lite"},
+	{Provider: "gemini", Model: "gemini-3-flash-preview"},
+	{Provider: "gemini", Model: "gemma-4-26b-a4b-it"},
+
+	// Groq fallbacks (free tier)
 	{Provider: "groq", Model: "meta-llama/llama-4-scout-17b-16e-instruct"},
-	{Provider: "cerebras", Model: "llama3.1-8b"},
 	{Provider: "groq", Model: "llama-3.3-70b-versatile"},
 	{Provider: "groq", Model: "moonshotai/kimi-k2-instruct"},
-	{Provider: "cerebras", Model: "qwen-3-235b-a22b-instruct-2507"},
-	{Provider: "groq", Model: "openai/gpt-oss-120b"},
 	{Provider: "groq", Model: "qwen/qwen3-32b"},
 	{Provider: "groq", Model: "llama-3.1-8b-instant"},
+
+	// Cerebras fallback
+	{Provider: "cerebras", Model: "llama3.1-8b"},
 }
 
 // providerBaseURLs maps provider names to their OpenAI-compatible base URLs.

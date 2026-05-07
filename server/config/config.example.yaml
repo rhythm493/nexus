@@ -11,7 +11,7 @@ mcp_servers_dir: ./mcp-servers
 # LLM Provider Configuration
 llm:
   provider: rotating  # rotating, groq, cerebras, ollama, or lmstudio
-  model: meta-llama/llama-4-scout-17b-16e-instruct
+  model: gemma-4-26b-a4b-it
   api_key: ""  # For Groq (or set GROQ_API_KEY env var)
   base_url: ""  # For Ollama/LM Studio (leave empty for defaults)
   # Ollama default: http://localhost:11434/v1

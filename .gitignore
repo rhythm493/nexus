@@ -74,6 +74,7 @@ logs/
 
 # Radio data (library, binaries, database)
 server/data/
+data/
 
 # Temporary files
 tmp/

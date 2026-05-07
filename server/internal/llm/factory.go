@@ -75,7 +75,7 @@ func NewGroqProvider(apiKey, model string) (Provider, error) {
 		return nil, fmt.Errorf("API key required for Groq")
 	}
 	if model == "" {
-		model = "meta-llama/llama-4-scout-17b-16e-instruct"
+		model = "gemma-4-26b-a4b-it"
 	}
 	return NewOpenAIProvider("groq", "https://api.groq.com/openai/v1", apiKey, model, 60*time.Second), nil
 }

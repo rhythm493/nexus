@@ -35,10 +35,11 @@ make test                           # Go test + Flutter test
 make deps                           # Install all dependencies
 make clean                          # Clean all build artifacts
 
-# --- Docker ---
-docker-compose up -d                # Start all services
-docker-compose logs -f              # View logs
-docker-compose down                 # Stop services
+# --- Docker (Traefik stacks) ---
+docker compose -f stacks/traefik-stack.yml up -d              # Start Traefik
+docker compose -f stacks/nexus-stack-traefik.yml up -d        # Start Nexus
+docker compose -f stacks/traefik-stack.yml logs -f            # View Traefik logs
+docker compose -f stacks/nexus-stack-traefik.yml logs -f      # View Nexus logs
 ```
 
 ## CI Pipeline (`.github/workflows/ci.yml`)

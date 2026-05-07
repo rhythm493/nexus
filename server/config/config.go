@@ -130,7 +130,7 @@ func Load() (*Config, error) {
 		},
 		LLM: LLMConfig{
 			Provider: "rotating",
-			Model:    "meta-llama/llama-4-scout-17b-16e-instruct",
+			Model:    "gemma-4-26b-a4b-it",
 			APIKey:   "",
 			BaseURL:  "",
 		},
@@ -202,7 +202,7 @@ func Load() (*Config, error) {
 		cfg.LLM = LLMConfig{
 			Provider: "groq",
 			APIKey:   cfg.LLMAPIKey,
-			Model:    "meta-llama/llama-4-scout-17b-16e-instruct",
+			Model:    "gemma-4-26b-a4b-it",
 		}
 	}
 	// If LLM.APIKey is not set but LLMAPIKey is, use it
