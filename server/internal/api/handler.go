@@ -306,10 +306,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	provider := s.llmProvider
 	if req.Provider != "" && req.Model != "" {
 		factory := llm.NewProviderFactory()
+		apiKey := llm.ProviderAPIKey(req.Provider)
+		if apiKey == "" {
+			apiKey = s.config.LLM.APIKey
+		}
 		cfg := llm.ProviderConfig{
 			Provider: req.Provider,
 			Model:    req.Model,
-			APIKey:   s.config.LLM.APIKey,
+			APIKey:   apiKey,
 			BaseURL:  s.config.LLM.BaseURL,
 		}
 		customProvider, err := factory.CreateProvider(cfg)

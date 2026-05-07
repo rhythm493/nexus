@@ -55,6 +55,17 @@ var providerAPIKeyEnvs = map[string]string{
 	"cliproxy": "CLIPROXY_API_KEY",
 }
 
+// ProviderAPIKey returns the API key for the given provider name by reading
+// the corresponding environment variable. Returns empty string if the provider
+// is unknown or the env var is not set.
+func ProviderAPIKey(provider string) string {
+	envVar, ok := providerAPIKeyEnvs[provider]
+	if !ok {
+		return ""
+	}
+	return os.Getenv(envVar)
+}
+
 // providers that work without a real API key
 var dummyKeyProviders = map[string]bool{
 	"cliproxy": true,
