@@ -969,6 +969,24 @@ func (s *Server) handleGetProviderModels(w http.ResponseWriter, r *http.Request)
 			}
 		}
 		provider, err = llm.NewLMStudioProvider(baseURL, "dummy")
+	case "gemini":
+		apiKey := os.Getenv("GEMINI_API_KEY")
+		if apiKey == "" {
+			http.Error(w, "Gemini API key not configured", http.StatusBadRequest)
+			return
+		}
+		provider = llm.NewOpenAIProvider("gemini", "https://generativelanguage.googleapis.com/v1beta/openai", apiKey, "dummy", 60*time.Second)
+		err = nil
+	case "cliproxy":
+		baseURL := r.URL.Query().Get("base_url")
+		if baseURL == "" {
+			baseURL = s.config.LLM.BaseURL
+			if baseURL == "" {
+				baseURL = "http://localhost:24080/v1"
+			}
+		}
+		provider = llm.NewOpenAIProvider("cliproxy", baseURL, "dummy", "dummy", 120*time.Second)
+		err = nil
 	default:
 		http.Error(w, "Unknown provider", http.StatusBadRequest)
 		return

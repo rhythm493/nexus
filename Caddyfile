@@ -1,0 +1,7 @@
+# Caddy configuration for Nexus server
+# Automatically obtains Let's Encrypt certificates for DuckDNS domain
+
+pocket-assistant-nexus.duckdns.org {
+    # Reverse proxy to Nexus server (running on HTTP)
+    reverse_proxy localhost:8080
+}

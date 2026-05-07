@@ -1,8 +1,8 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class SettingsService extends ChangeNotifier {
   SharedPreferences? _prefs;
@@ -25,8 +25,7 @@ class SettingsService extends ChangeNotifier {
   String? get error => _error;
 
   SettingsService() {
-    _httpClient = HttpClient()
-      ..badCertificateCallback = (cert, host, port) => true;
+    _httpClient = HttpClient(); // Proper HTTPS validation
     _initialized = _init();
   }
 

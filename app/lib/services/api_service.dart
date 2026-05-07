@@ -2,12 +2,15 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/message.dart';
 
 const Duration _defaultTimeout = Duration(seconds: 30);
 const Duration _healthCheckTimeout = Duration(seconds: 5);
+const String _defaultServerUrl = 'https://pocket-assistant-nexus.duckdns.org';
+const String _savedServerKey = 'nexus_saved_server_url';
 
 /// Service for communicating with the Nexus server
 class ApiService extends ChangeNotifier {
@@ -19,6 +22,7 @@ class ApiService extends ChangeNotifier {
   String? _overrideProvider;
   String? _overrideModel;
   String? _selectedMode;
+  SharedPreferences? _prefs;
 
   bool get isConnected => _isConnected;
   String? get error => _error;
@@ -28,19 +32,51 @@ class ApiService extends ChangeNotifier {
 
   ApiService() {
     _setupClient();
+    _init();
+  }
+
+  Future<void> _init() async {
+    _prefs = await SharedPreferences.getInstance();
+    await _loadSavedServer();
   }
 
   void _setupClient() {
     _client = HttpClient();
-    // Accept self-signed certificates (server uses self-signed cert)
-    _client!.badCertificateCallback = (cert, host, port) => true;
+    // Use proper HTTPS validation (no longer accepting self-signed certs)
+  }
+
+  /// Load saved server URL and auto-connect
+  Future<void> _loadSavedServer() async {
+    final savedUrl = _prefs?.getString(_savedServerKey);
+    if (savedUrl != null && savedUrl.isNotEmpty) {
+      _baseUrl = savedUrl;
+      _conversationId = const Uuid().v4();
+      notifyListeners();
+      // Auto-connect to saved server
+      await checkHealth();
+    } else {
+      // Set default server URL
+      setServer(_defaultServerUrl);
+    }
+  }
+
+  /// Save server URL to persistent storage
+  Future<void> _saveServer(String url) async {
+    await _prefs?.setString(_savedServerKey, url);
   }
 
   /// Set the server URL
   void setServer(String url) {
     _baseUrl = url;
     _conversationId = const Uuid().v4();
+    _saveServer(url);
     notifyListeners();
+  }
+
+  /// Reset to default server URL
+  Future<void> resetToDefault() async {
+    setServer(_defaultServerUrl);
+    await checkHealth();
   }
 
   /// Set provider override for chat requests

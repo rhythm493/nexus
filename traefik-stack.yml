@@ -29,8 +29,6 @@ services:
       # Dashboard
       - "--api.dashboard=true"
       - "--api.insecure=false"
-    environment:
-      # DUCKDNS_TOKEN no longer needed for HTTP challenge
     networks:
       - traefik_proxy
 

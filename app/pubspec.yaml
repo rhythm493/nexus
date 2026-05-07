@@ -1,5 +1,5 @@
 name: nexus
-description: Voice-controlled AI assistant connecting to your PC over LAN.
+description: Voice-controlled AI assistant with online backend.
 publish_to: 'none'
 
 version: 1.0.0+1
@@ -14,9 +14,6 @@ dependencies:
   # HTTP client with SSE support
   dio: ^5.4.0
 
-  # mDNS service discovery
-  bonsoir: ^5.1.4
-
   # Voice input (offline with sherpa-onnx)
   sherpa_onnx: ^1.12.23
   path_provider: ^2.1.2
@@ -28,9 +25,6 @@ dependencies:
   # For model download
   http: ^1.2.0
   archive: ^3.6.1
-
-  # Secure storage for certificates
-  flutter_secure_storage: ^10.0.0
 
   # State management
   provider: ^6.1.1

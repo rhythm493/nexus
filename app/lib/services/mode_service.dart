@@ -35,8 +35,7 @@ class ModeService extends ChangeNotifier {
   String? get error => _error;
 
   ModeService() {
-    _httpClient = HttpClient()
-      ..badCertificateCallback = (cert, host, port) => true;
+    _httpClient = HttpClient();
     _initialized = _init();
   }
 

@@ -2,12 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../models/message.dart';
 import '../services/api_service.dart';
 import '../services/cart_service.dart';
-import '../services/discovery_service.dart';
 import '../services/mode_service.dart';
 import '../services/voice_service.dart';
 import '../widgets/cart_product_card.dart';
@@ -64,8 +62,13 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onApiServiceChange() async {
     final apiService = context.read<ApiService>();
     final modeService = context.read<ModeService>();
+    final voiceService = context.read<VoiceService>();
 
     if (apiService.isConnected && apiService.baseUrl != null) {
+      // Set server URL for voice model download
+      voiceService.setServer(apiService.baseUrl!);
+      voiceService.checkModelStatus();
+
       // Fetch modes if not already loaded
       if (modeService.availableModes.isEmpty && !modeService.isLoading) {
         debugPrint('Fetching modes from ${apiService.baseUrl}');
@@ -91,31 +94,17 @@ class _ChatScreenState extends State<ChatScreen> {
     // Initialize voice
     await voiceService.initialize();
 
-    // Fetch modes when connected
+    // If already connected (from saved URL), fetch modes
     if (apiService.isConnected && apiService.baseUrl != null) {
       await modeService.fetchModes(apiService.baseUrl!);
       // Set initial mode
       if (modeService.selectedModeId != null) {
         apiService.setMode(modeService.selectedModeId);
       }
+      // Set server URL for voice model download + check if model exists
+      voiceService.setServer(apiService.baseUrl!);
+      voiceService.checkModelStatus();
     }
-
-    // Start server discovery and auto-connect when found
-    if (!mounted) return;
-    final discoveryService = context.read<DiscoveryService>();
-    discoveryService.addListener(() {
-      if (!mounted) return;
-      if (!apiService.isConnected && discoveryService.selectedServer != null) {
-        final server = discoveryService.selectedServer!;
-        apiService.setServer(server.url);
-        apiService.checkHealth();
-        // Set server URL for voice model download + check if model exists
-        final voice = context.read<VoiceService>();
-        voice.setServer(server.url);
-        voice.checkModelStatus();
-      }
-    });
-    discoveryService.startDiscovery();
   }
 
   void _scrollToBottom() {
@@ -730,17 +719,7 @@ class _SettingsSheet extends StatelessWidget {
               ),
               const SizedBox(height: 24),
 
-              // Server section
-              Text(
-                'Server Connection',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              _ServerSection(),
-
-              const SizedBox(height: 24),
-
-              // LLM Provider section
+              // Language Model section
               Text(
                 'Language Model',
                 style: Theme.of(context).textTheme.titleMedium,
@@ -752,6 +731,16 @@ class _SettingsSheet extends StatelessWidget {
 
               // Location section
               const LocationSettingsSection(),
+
+              const SizedBox(height: 24),
+
+              // Server Connection (MOVED TO BOTTOM)
+              Text(
+                'Server Connection',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              const _ServerSection(),
             ],
           ),
         );
@@ -761,10 +750,12 @@ class _SettingsSheet extends StatelessWidget {
 }
 
 class _ServerSection extends StatelessWidget {
+  const _ServerSection();
+
   @override
   Widget build(BuildContext context) {
-    return Consumer2<DiscoveryService, ApiService>(
-      builder: (context, discovery, api, _) {
+    return Consumer<ApiService>(
+      builder: (context, api, _) {
         return Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -782,83 +773,60 @@ class _ServerSection extends StatelessWidget {
                     Text(api.isConnected ? 'Connected' : 'Disconnected'),
                   ],
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
 
-                // Discovered servers
-                if (discovery.servers.isNotEmpty) ...[
-                  const Text('Discovered servers:'),
-                  const SizedBox(height: 8),
-                  ...discovery.servers.map((server) => ListTile(
-                        dense: true,
-                        title: Text(server.name),
-                        subtitle: Text('${server.host}:${server.port}'),
-                        trailing: discovery.selectedServer == server
-                            ? const Icon(Icons.check, color: Colors.green)
-                            : null,
-                        onTap: () async {
-                          discovery.selectServer(server);
-                          api.setServer(server.url);
-                          context.read<VoiceService>().setServer(server.url);
-                          context.read<VoiceService>().checkModelStatus();
-                          // Show loading snackbar while connecting
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Row(
-                                children: [
-                                  SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                  SizedBox(width: 12),
-                                  Text('Connecting to server...'),
-                                ],
-                              ),
-                              duration: Duration(seconds: 2),
-                            ),
-                          );
-                          await api.checkHealth();
-                        },
-                      )),
-                ] else if (discovery.isSearching) ...[
-                  const ServerListShimmer(),
-                ] else ...[
-                  const Text('No servers found'),
+                // Current server URL
+                if (api.baseUrl != null) ...[
+                  Text(
+                    'Server: ${api.baseUrl}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 16),
                 ],
 
-                const SizedBox(height: 16),
-
-                // Manual connection
+                // Change server button
                 Row(
                   children: [
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () => discovery.startDiscovery(),
-                        icon: const Icon(Icons.refresh),
-                        label: const Text('Refresh'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () => _showQRScanner(context),
-                        icon: const Icon(Icons.qr_code_scanner),
-                        label: const Text('Scan QR'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: OutlinedButton.icon(
                         onPressed: () => _showManualDialog(context),
                         icon: const Icon(Icons.edit),
-                        label: const Text('Manual'),
+                        label: const Text('Change Server'),
                       ),
                     ),
                   ],
                 ),
+
+                // Reset to default button (show only if not using default)
+                if (api.baseUrl != 'https://pocket-assistant-nexus.duckdns.org') ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () async {
+                            await api.resetToDefault();
+                            if (context.mounted) {
+                              context.read<VoiceService>().setServer(api.baseUrl!);
+                              context.read<VoiceService>().checkModelStatus();
+                            }
+                          },
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('Reset to Default'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+
+                // Error message if any
+                if (api.error != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    api.error!,
+                    style: TextStyle(color: Colors.red[400], fontSize: 12),
+                  ),
+                ],
               ],
             ),
           ),
@@ -867,61 +835,25 @@ class _ServerSection extends StatelessWidget {
     );
   }
 
-  void _showQRScanner(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => Scaffold(
-          appBar: AppBar(title: const Text('Scan Server QR Code')),
-          body: MobileScanner(
-            onDetect: (capture) {
-              final List<Barcode> barcodes = capture.barcodes;
-              for (final barcode in barcodes) {
-                if (barcode.rawValue != null) {
-                  final String code = barcode.rawValue!;
-                  final discovery = context.read<DiscoveryService>();
-                  final api = context.read<ApiService>();
-                  discovery.setFromQR(code);
-                  if (discovery.hasServer) {
-                    api.setServer(discovery.selectedServer!.url);
-                    api.checkHealth();
-                  }
-                  Navigator.pop(context);
-                  return;
-                }
-              }
-            },
-          ),
-        ),
-      ),
-    );
-  }
-
   void _showManualDialog(BuildContext outerContext) {
-    final hostController = TextEditingController();
-    final portController = TextEditingController(text: '8443');
+    final api = outerContext.read<ApiService>();
+    final hostController = TextEditingController(text: api.baseUrl ?? 'https://pocket-assistant-nexus.duckdns.org');
     final scaffoldMessenger = ScaffoldMessenger.of(outerContext);
 
     showDialog(
       context: outerContext,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Manual Connection'),
+        title: const Text('Change Server'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
               controller: hostController,
               decoration: const InputDecoration(
-                labelText: 'Host',
-                hintText: '192.168.1.100',
+                labelText: 'Server URL',
+                hintText: 'https://example.com',
               ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: portController,
-              decoration: const InputDecoration(
-                labelText: 'Port',
-              ),
-              keyboardType: TextInputType.number,
+              keyboardType: TextInputType.url,
             ),
           ],
         ),
@@ -932,18 +864,22 @@ class _ServerSection extends StatelessWidget {
           ),
           FilledButton(
             onPressed: () async {
-              final host = hostController.text.trim();
-              final port = int.tryParse(portController.text) ?? 8443;
-              if (host.isNotEmpty) {
-                final discovery = outerContext.read<DiscoveryService>();
-                final api = outerContext.read<ApiService>();
-                discovery.setManualServer(host, port);
-                api.setServer('https://$host:$port');
-                outerContext.read<VoiceService>().setServer('https://$host:$port');
+              final url = hostController.text.trim();
+              if (url.isNotEmpty) {
+                // Ensure URL has proper format
+                var finalUrl = url;
+                if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
+                  finalUrl = 'https://$finalUrl';
+                }
+
+                api.setServer(finalUrl);
+                outerContext.read<VoiceService>().setServer(finalUrl);
                 outerContext.read<VoiceService>().checkModelStatus();
                 Navigator.pop(dialogContext);
+
+                // Show loading and try to connect
                 final connected = await api.checkHealth();
-                if (!connected) {
+                if (!connected && outerContext.mounted) {
                   scaffoldMessenger.showSnackBar(
                     SnackBar(
                       content: Text(

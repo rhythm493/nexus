@@ -7,8 +7,7 @@ import '../models/cart_state.dart';
 class CartService extends ChangeNotifier {
   CartFullState? _fullCart;
   bool _isExpanded = false;
-  final HttpClient _httpClient = HttpClient()
-    ..badCertificateCallback = (cert, host, port) => true;
+  final HttpClient _httpClient = HttpClient();
 
   CartFullState? get fullCart => _fullCart;
   bool get isExpanded => _isExpanded;
