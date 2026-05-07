@@ -21,17 +21,16 @@ services:
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       
-      # Let's Encrypt with DuckDNS DNS challenge
-      - "--certificatesresolvers.letsencrypt.acme.dnschallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.dnschallenge.provider=duckdns"
+      # Let's Encrypt with HTTP challenge (uses port 80)
       - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
       - "--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
       
       # Dashboard (optional)
       - "--api.dashboard=true"
       - "--api.insecure=false"
     environment:
-      - DUCKDNS_TOKEN=${DUCKDNS_TOKEN}  # Get from https://duckdns.org
+      # DUCKDNS_TOKEN no longer needed for HTTP challenge
     networks:
       - traefik_proxy
 
