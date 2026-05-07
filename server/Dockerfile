@@ -64,7 +64,7 @@ EXPOSE 8443 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -k -f https://localhost:8443/api/v1/health || exit 1
+    CMD curl -f http://localhost:8443/api/v1/health || exit 1
 
 # Run the application
 CMD ["/app/nexus"]
