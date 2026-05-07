@@ -302,7 +302,8 @@ func (r *RotatingProvider) ListModels(ctx context.Context) ([]Model, error) {
 	return all, nil
 }
 
-// isConnectionError checks if an error indicates the provider is unreachable.
+// isConnectionError checks if an error indicates the provider is unreachable
+// or temporarily unavailable (503).
 func isConnectionError(msg string) bool {
 	patterns := []string{
 		"connection refused",
@@ -311,6 +312,8 @@ func isConnectionError(msg string) bool {
 		"connect: connection refused",
 		"i/o timeout",
 		"TLS handshake timeout",
+		"api error (503)",       // Service Unavailable / high demand
+		"api error (502)",       // Bad Gateway
 	}
 	lower := strings.ToLower(msg)
 	for _, p := range patterns {

@@ -2,46 +2,50 @@ package websearch
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strings"
 	"time"
 )
 
-// DDGClient provides web search via DuckDuckGo
+// DDGClient provides web search via DuckDuckGo HTML search
 type DDGClient struct {
 	httpClient *http.Client
-	baseURL    string
 }
 
 // NewDDGClient creates a new DuckDuckGo search client
 func NewDDGClient() *DDGClient {
 	return &DDGClient{
 		httpClient: &http.Client{Timeout: 10 * time.Second},
-		baseURL:    "https://api.duckduckgo.com/",
 	}
 }
 
-// Search performs a web search
+var (
+	resultRx   = regexp.MustCompile(`<a rel="nofollow" class="result__a" href="([^"]+)"[^>]*>(.*?)</a>`)
+	snippetRx  = regexp.MustCompile(`<a class="result__snippet"[^>]*>(.*?)</a>`)
+	cleanTagRx = regexp.MustCompile(`<[^>]+>`)
+	cleanURLRx = regexp.MustCompile(`uddg=([^&]+)`)
+)
+
+// Search performs a web search using DuckDuckGo HTML search
 func (c *DDGClient) Search(ctx context.Context, query string, maxResults int) ([]SearchResult, error) {
 	if maxResults == 0 {
 		maxResults = 5
 	}
 
-	// DuckDuckGo Instant Answer API
 	params := url.Values{}
 	params.Set("q", query)
-	params.Set("format", "json")
-	params.Set("no_html", "1")
-	params.Set("skip_disambig", "1")
 
-	reqURL := c.baseURL + "?" + params.Encode()
+	reqURL := "https://html.duckduckgo.com/html/?" + params.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -49,58 +53,41 @@ func (c *DDGClient) Search(ctx context.Context, query string, maxResults int) ([
 	}
 	defer resp.Body.Close()
 
-	var ddgResp DDGResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ddgResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	// Convert to unified format
-	results := make([]SearchResult, 0, maxResults)
+	html := string(body)
 
-	// Add instant answer if available
-	if ddgResp.Abstract != "" {
+	titles := resultRx.FindAllStringSubmatch(html, -1)
+	snippets := snippetRx.FindAllStringSubmatch(html, -1)
+
+	results := make([]SearchResult, 0, maxResults)
+	for i := 0; i < len(titles) && len(results) < maxResults; i++ {
+		title := cleanTagRx.ReplaceAllString(titles[i][2], "")
+
+		rawURL := titles[i][1]
+		decodedURL := "https://" + strings.TrimPrefix(rawURL, "//")
+		if m := cleanURLRx.FindStringSubmatch(rawURL); len(m) > 1 {
+			if u, err := url.QueryUnescape(m[1]); err == nil {
+				decodedURL = u
+			}
+		}
+
+		desc := ""
+		if i < len(snippets) {
+			desc = cleanTagRx.ReplaceAllString(snippets[i][1], "")
+		}
+
 		results = append(results, SearchResult{
-			Title:       ddgResp.Heading,
-			URL:         ddgResp.AbstractURL,
-			Description: ddgResp.Abstract,
-			Source:      ddgResp.AbstractSource,
+			Title:       title,
+			URL:         decodedURL,
+			Description: desc,
 		})
 	}
 
-	// Add related topics
-	for i, topic := range ddgResp.RelatedTopics {
-		if i >= maxResults-1 { // Leave room for abstract
-			break
-		}
-		if topic.Text != "" {
-			title := topic.Text
-			if len(title) > 100 {
-				title = title[:100] + "..."
-			}
-			results = append(results, SearchResult{
-				Title:       title,
-				URL:         topic.FirstURL,
-				Description: topic.Text,
-			})
-		}
-	}
-
 	return results, nil
-}
-
-// DDGResponse represents DuckDuckGo API response
-type DDGResponse struct {
-	Abstract       string         `json:"Abstract"`
-	AbstractURL    string         `json:"AbstractURL"`
-	AbstractSource string         `json:"AbstractSource"`
-	Heading        string         `json:"Heading"`
-	RelatedTopics  []RelatedTopic `json:"RelatedTopics"`
-}
-
-// RelatedTopic represents a related search result
-type RelatedTopic struct {
-	FirstURL string `json:"FirstURL"`
-	Text     string `json:"Text"`
 }
 
 // SearchResult represents a unified search result
