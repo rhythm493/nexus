@@ -90,6 +90,88 @@ func (c *DDGClient) Search(ctx context.Context, query string, maxResults int) ([
 	return results, nil
 }
 
+// ReadURL fetches a URL and extracts readable text content.
+// Returns the page title and body text, capped at maxLen bytes.
+func (c *DDGClient) ReadURL(ctx context.Context, urlStr string, maxLen int) (string, string, error) {
+	if maxLen == 0 {
+		maxLen = 4000
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")
+	req.Header.Set("Accept", "text/html")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to fetch URL: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxLen*2)))
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	html := string(body)
+
+	// Extract title
+	titleRx := regexp.MustCompile(`<title[^>]*>(.*?)</title>`)
+	title := ""
+	if m := titleRx.FindStringSubmatch(html); len(m) > 1 {
+		title = cleanTagRx.ReplaceAllString(m[1], "")
+	}
+
+	// Extract body content
+	text := extractReadableText(html)
+
+	if len(text) > maxLen {
+		text = text[:maxLen] + "..."
+	}
+
+	return title, text, nil
+}
+
+// extractReadableText strips HTML and extracts text from common content tags.
+func extractReadableText(html string) string {
+	var parts []string
+
+	// Extract from article, main, and body sections
+	sectionRx := regexp.MustCompile(`<article[^>]*>.*?</article>|<main[^>]*>.*?</main>|<body[^>]*>.*?</body>`)
+	section := sectionRx.FindString(html)
+	if section == "" {
+		section = html
+	}
+
+	// Extract text from common content tags
+	tagRxs := []*regexp.Regexp{
+		regexp.MustCompile(`<p[^>]*>(.*?)</p>`),
+		regexp.MustCompile(`<h1[^>]*>(.*?)</h1>`),
+		regexp.MustCompile(`<h2[^>]*>(.*?)</h2>`),
+		regexp.MustCompile(`<h3[^>]*>(.*?)</h3>`),
+		regexp.MustCompile(`<h4[^>]*>(.*?)</h4>`),
+		regexp.MustCompile(`<h5[^>]*>(.*?)</h5>`),
+		regexp.MustCompile(`<h6[^>]*>(.*?)</h6>`),
+		regexp.MustCompile(`<li[^>]*>(.*?)</li>`),
+		regexp.MustCompile(`<blockquote[^>]*>(.*?)</blockquote>`),
+		regexp.MustCompile(`<pre[^>]*>(.*?)</pre>`),
+	}
+
+	for _, rx := range tagRxs {
+		matches := rx.FindAllStringSubmatch(section, -1)
+		for _, m := range matches {
+			text := strings.TrimSpace(cleanTagRx.ReplaceAllString(m[1], ""))
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+
+	return strings.Join(parts, "\n\n")
+}
+
 // SearchResult represents a unified search result
 type SearchResult struct {
 	Title       string `json:"title"`
@@ -124,6 +206,24 @@ func (c *DDGClient) ListTools() []ToolDefinition {
 					},
 				},
 				"required": []string{"query"},
+			},
+		},
+		{
+			Name:        "web_read",
+			Description: "Visit a URL and extract readable text content. Returns the page title and body text. Use this to read full articles, documentation, or any web page.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"url": map[string]interface{}{
+						"type":        "string",
+						"description": "Full URL to visit (e.g., 'https://en.wikipedia.org/wiki/Paris')",
+					},
+					"max_length": map[string]interface{}{
+						"type":        "number",
+						"description": "Maximum characters to return (default: 4000)",
+					},
+				},
+				"required": []string{"url"},
 			},
 		},
 	}

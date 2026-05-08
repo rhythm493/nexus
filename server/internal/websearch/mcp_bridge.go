@@ -37,19 +37,43 @@ func (b *MCPBridge) ListTools() []mcp.Tool {
 
 // ExecuteTool executes a web search tool
 func (b *MCPBridge) ExecuteTool(ctx context.Context, toolName string, args map[string]interface{}) (interface{}, error) {
-	if toolName != "web_search" {
+	switch toolName {
+	case "web_search":
+		query, ok := args["query"].(string)
+		if !ok || query == "" {
+			return nil, fmt.Errorf("query parameter required")
+		}
+
+		maxResults := 5
+		if mr, ok := args["max_results"].(float64); ok {
+			maxResults = int(mr)
+		}
+
+		return b.client.Search(ctx, query, maxResults)
+
+	case "web_read":
+		urlStr, ok := args["url"].(string)
+		if !ok || urlStr == "" {
+			return nil, fmt.Errorf("url parameter required")
+		}
+
+		maxLen := 4000
+		if ml, ok := args["max_length"].(float64); ok {
+			maxLen = int(ml)
+		}
+
+		title, text, err := b.client.ReadURL(ctx, urlStr, maxLen)
+		if err != nil {
+			return nil, err
+		}
+
+		return map[string]interface{}{
+			"title": title,
+			"text":  text,
+			"url":   urlStr,
+		}, nil
+
+	default:
 		return nil, fmt.Errorf("unknown tool: %s", toolName)
 	}
-
-	query, ok := args["query"].(string)
-	if !ok || query == "" {
-		return nil, fmt.Errorf("query parameter required")
-	}
-
-	maxResults := 5
-	if mr, ok := args["max_results"].(float64); ok {
-		maxResults = int(mr)
-	}
-
-	return b.client.Search(ctx, query, maxResults)
 }
