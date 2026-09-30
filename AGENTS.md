@@ -35,12 +35,39 @@ make test                           # Go test + Flutter test
 make deps                           # Install all dependencies
 make clean                          # Clean all build artifacts
 
-# --- Docker (Traefik stacks) ---
+# --- Docker (trading-eu, production) ---
+docker compose -f stacks/nexus-trading-eu.yml up -d         # Start Nexus
+docker compose -f stacks/nexus-trading-eu.yml logs -f       # View Nexus logs
+
+# --- Docker (legacy Traefik stacks, superseded) ---
 docker compose -f stacks/traefik-stack.yml up -d              # Start Traefik
 docker compose -f stacks/nexus-stack-traefik.yml up -d        # Start Nexus
 docker compose -f stacks/traefik-stack.yml logs -f            # View Traefik logs
 docker compose -f stacks/nexus-stack-traefik.yml logs -f      # View Nexus logs
 ```
+
+## Deployment: trading-eu (production)
+
+Nexus runs on `trading-eu` (Contabo `vmi3461756`, France) — **not** on the OCI VMs.
+No Portainer: plain `docker compose`.
+
+```bash
+ssh trading-eu
+cd /opt/nexus && sudo docker compose up -d
+sudo docker exec nexus wget -qO- http://127.0.0.1:8443/api/v1/health
+```
+
+- Compose lives at `/opt/nexus/docker-compose.yml`, generated from `stacks/nexus-trading-eu.yml`.
+- Secrets come from `/opt/nexus/.env` (mode `600`, root-owned) — **never** from the repo's
+  `.env`, which is gitignored. The compose file uses `${VAR:?msg}` so a missing key fails at
+  `up` time rather than silently degrading the `rotating` provider.
+- **No published ports.** Nexus listens on 8443 HTTP-only and is reachable only via the
+  mailcow Docker network at `172.22.1.106`, behind mailcow's nginx on
+  `pocket-assistant-nexus.duckdns.org` (shared LE cert; config at
+  `/opt/mailcow-dockerized/data/conf/nginx/nexus.conf`).
+- **QuickCom is a sibling service** on the same host, reached over the `nexus_net` bridge
+  at `QUICKCOM_URL=http://ts-quickcom:10000`. See `DEPLOYMENT_LOCAL.md` for the full
+  cutover checklist and the host layout.
 
 ## CI Pipeline (`.github/workflows/ci.yml`)
 
@@ -150,6 +177,7 @@ import '../models/message.dart';
 - **Model info bar** — `ModelInfoBar` widget above chat input shows current model display name + context size
 - **Model switch detection** — When a response uses a different model than the previous turn, a `"Switched to ..."` system divider is inserted
 - **`make app` passes `--dart-define`** — reads `NEXUS_SERVER_URL` from `../.env` for dev server URL
+- **QuickCom prices are paise integers** — `Product` in `server/internal/quickcom/client.go` models QuickCom's `UnifiedProduct` field names (`pricePaise`, `mrpPaise`, `perUnitPricePaise`, `quantityValue`). It does **not** model the cache's narrower `CachedProduct` (`price`/`originalPrice` as strings). If QuickCom ever returns the latter shape, Go decodes it to `0` silently and grocery results show price 0 to both the user and the LLM. Any change to `POST /api/search`'s response shape must be mirrored here and re-checked against the QuickCom repo.
 - **No test files exist yet** — when adding tests, follow `*_test.go` / `*_test.dart` conventions
 - **After editing Go code**, run `cd server && go build ./...` to verify compilation
 - **After editing Dart code**, run `cd app && flutter analyze` to verify no errors

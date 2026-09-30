@@ -37,13 +37,11 @@ Voice-controlled agentic AI assistant connecting phone to PC via LAN. Rotating L
 
 ## Quick Start
 
-### Option 1: Docker (Traefik stack — Production)
+### Option 1: Docker (trading-eu stack — Production)
 
 ```bash
-# Start Traefik reverse proxy + Nexus
-cd stacks
-docker compose -f traefik-stack.yml up -d
-docker compose -f nexus-stack-traefik.yml up -d
+# On trading-eu: compose file is already staged at /opt/nexus/docker-compose.yml
+cd /opt/nexus && sudo docker compose up -d
 ```
 
 ### Option 2: Local Development
@@ -504,18 +502,29 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 - `provider: ^6.1.1` - State management
 - `dio: ^5.4.0` - HTTP client
 
-## Docker Deployment (Traefik)
+## Docker Deployment (trading-eu)
 
-Deployment uses two stack files in `stacks/`:
-
-- `stacks/traefik-stack.yml` — Traefik reverse proxy (port 80/443, Let's Encrypt)
-- `stacks/nexus-stack-traefik.yml` — Nexus behind Traefik with auto-HTTPS
+The live deployment is a single stack, `stacks/nexus-trading-eu.yml`, run on `trading-eu`
+(Contabo `vmi3461756`, France) with plain `docker compose` — no Portainer, no Traefik:
 
 ```bash
-cd stacks
-docker compose -f traefik-stack.yml up -d
-docker compose -f nexus-stack-traefik.yml up -d
+ssh trading-eu
+cd /opt/nexus && sudo docker compose up -d && sudo docker compose logs -f
+sudo docker exec nexus wget -qO- http://127.0.0.1:8443/api/v1/health
 ```
+
+- **No published ports.** Nexus is HTTP-only on 8443 and reachable only from the mailcow
+  Docker network (`172.22.1.106`), where the existing mailcow nginx terminates TLS for
+  `pocket-assistant-nexus.duckdns.org`.
+- **Secrets** come from `/opt/nexus/.env` (mode `600`, root-owned), not the repo's
+  gitignored `.env`. The stack uses `${VAR:?msg}` for the four LLM keys.
+- **QuickCom is co-located** on the same host and reached over the private `nexus_net`
+  bridge at `QUICKCOM_URL=http://ts-quickcom:10000`, so no traffic leaves the host to
+  reach it.
+
+`stacks/traefik-stack.yml` + `stacks/nexus-stack-traefik.yml` are the **legacy** OCI
+(VM1) deployment and are superseded. Full host layout, the DNS/cert cutover checklist,
+and the QuickCom exit-node notes are in `DEPLOYMENT_LOCAL.md`.
 
 ## Grocery System Architecture
 

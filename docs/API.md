@@ -1,7 +1,9 @@
 # pocket-assistant API Reference
 
 Dev mode (no TLS): `http://<server-ip>:8443`
-Production: `https://<domain>:443` (via Traefik)
+Production: `https://<domain>` (TLS terminated by mailcow's nginx in front of Nexus;
+production is `https://pocket-assistant-nexus.duckdns.org`). Nexus itself never serves
+TLS and publishes no ports — it is reachable only from the local Docker network.
 
 ## Endpoints
 
