@@ -304,11 +304,21 @@ func (h *Host) ExecuteTool(ctx context.Context, name string, args map[string]int
 		return nil, fmt.Errorf("tool returned error")
 	}
 
-	// Extract text content
+	// Extract rich content preserving types
+	richContent := ExtractRichContent(&result)
+
+	// Check for non-text content types (component, image, etc.)
+	for _, c := range richContent {
+		if c.Type != "text" {
+			return richContent, nil
+		}
+	}
+
+	// Fall back to text-only extraction for backward compatibility
 	var texts []string
-	for _, content := range result.Content {
-		if content.Type == "text" {
-			texts = append(texts, content.Text)
+	for _, c := range richContent {
+		if c.Type == "text" && c.Text != "" {
+			texts = append(texts, c.Text)
 		}
 	}
 

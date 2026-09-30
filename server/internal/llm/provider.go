@@ -25,9 +25,13 @@ type Provider interface {
 
 // Model represents an available LLM model
 type Model struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name,omitempty"`
-	ContextSize int                    `json:"context_size,omitempty"`
-	OwnedBy     string                 `json:"owned_by,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	ID           string                 `json:"id"`
+	Name         string                 `json:"name,omitempty"`
+	DisplayName  string                 `json:"display_name,omitempty"`
+	Description  string                 `json:"description,omitempty"`
+	ContextSize  int                    `json:"context_size,omitempty"`
+	OwnedBy      string                 `json:"owned_by,omitempty"`
+	PromptPrice  string                 `json:"prompt_price,omitempty"`
+	CompletePrice string                `json:"completion_price,omitempty"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty"`
 }

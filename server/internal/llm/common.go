@@ -43,8 +43,13 @@ type FunctionCall struct {
 
 // Response represents a chat response
 type Response struct {
-	Text      string     `json:"text"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	Text             string     `json:"text"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	Model            string     `json:"model,omitempty"`
+	FinishReason     string     `json:"finish_reason,omitempty"`
+	PromptTokens     int        `json:"prompt_tokens,omitempty"`
+	CompletionTokens int        `json:"completion_tokens,omitempty"`
+	TotalTokens      int        `json:"total_tokens,omitempty"`
 }
 
 // ConvertMCPTools converts MCP tools to LLM tool format
@@ -136,4 +141,55 @@ You can control music playback and Sonos speakers. Ask if user needs help with t
 	b.WriteString("Parameter types: Use numbers for volume/count (25 not \"25\").\n")
 
 	return b.String()
+}
+
+// ComponentBlock represents a parsed UI component block from an LLM response.
+type ComponentBlock struct {
+	Type string                 `json:"type"`
+	Data map[string]interface{} `json:"data"`
+}
+
+// ExtractComponentBlocks parses text for ```component\n{...}\n``` code fences
+// and returns the extracted components along with remaining text (fences removed).
+func ExtractComponentBlocks(text string) ([]ComponentBlock, string) {
+	var blocks []ComponentBlock
+	var remaining strings.Builder
+
+	for {
+		startIdx := strings.Index(text, "```component")
+		if startIdx == -1 {
+			remaining.WriteString(text)
+			break
+		}
+
+		remaining.WriteString(text[:startIdx])
+
+		rest := text[startIdx+len("```component"):]
+		rest = strings.TrimLeft(rest, " \t\r\n")
+
+		endIdx := strings.Index(rest, "```")
+		if endIdx == -1 {
+			remaining.WriteString(text[startIdx:])
+			break
+		}
+
+		jsonStr := rest[:endIdx]
+		jsonStr = strings.TrimSpace(jsonStr)
+
+		var data map[string]interface{}
+		if err := json.Unmarshal([]byte(jsonStr), &data); err == nil {
+			compType, _ := data["type"].(string)
+			if compType == "" {
+				compType = "unknown"
+			}
+			blocks = append(blocks, ComponentBlock{
+				Type: compType,
+				Data: data,
+			})
+		}
+
+		text = rest[endIdx+len("```"):]
+	}
+
+	return blocks, remaining.String()
 }

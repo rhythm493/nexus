@@ -66,8 +66,13 @@ func responseFromSDK(resp openai.ChatCompletionResponse) *Response {
 
 	choice := resp.Choices[0]
 	return &Response{
-		Text:      choice.Message.Content,
-		ToolCalls: toolCallsFromSDK(choice.Message.ToolCalls),
+		Text:             choice.Message.Content,
+		ToolCalls:        toolCallsFromSDK(choice.Message.ToolCalls),
+		Model:            resp.Model,
+		FinishReason:     string(choice.FinishReason),
+		PromptTokens:     resp.Usage.PromptTokens,
+		CompletionTokens: resp.Usage.CompletionTokens,
+		TotalTokens:      resp.Usage.TotalTokens,
 	}
 }
 

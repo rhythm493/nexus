@@ -55,8 +55,11 @@ type ToolCallResult struct {
 
 // ContentItem represents content in a tool result
 type ContentItem struct {
-	Type string `json:"type"` // "text", "image", etc.
-	Text string `json:"text,omitempty"`
+	Type     string      `json:"type"`     // "text", "image", "audio", "component", "resource"
+	Text     string      `json:"text,omitempty"`
+	Data     interface{} `json:"data,omitempty"`     // For "component" — structured UI data
+	MIMEType string      `json:"mimeType,omitempty"` // For "image" — "image/png", "image/jpeg", etc.
+	Source   string      `json:"source,omitempty"`   // For "image" — "base64" or URL
 }
 
 // InitializeParams are parameters for initialize

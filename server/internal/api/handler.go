@@ -20,8 +20,10 @@ import (
 	"github.com/rhythm493/pocket-assistant/server/internal/llm"
 	"github.com/rhythm493/pocket-assistant/server/internal/mcp"
 	"github.com/rhythm493/pocket-assistant/server/internal/mode"
+	modelcache "github.com/rhythm493/pocket-assistant/server/internal/models"
 	"github.com/rhythm493/pocket-assistant/server/internal/quickcom"
 	"github.com/rhythm493/pocket-assistant/server/internal/radio"
+	"github.com/rhythm493/pocket-assistant/server/internal/tools/results"
 	"github.com/rhythm493/pocket-assistant/server/internal/youtube"
 )
 
@@ -39,6 +41,7 @@ type Server struct {
 	cartManager    *cart.Manager
 	cartTools      *cart.ToolHandlers
 	quickcomClient *quickcom.Client
+	modelsCache   *modelcache.Cache
 	rateLimits    sync.Map // map[string]time.Time — per-IP last request time
 	done          chan struct{}
 }
@@ -69,11 +72,13 @@ type ChatRequest struct {
 
 // SSEEvent represents a server-sent event
 type SSEEvent struct {
-	Type    string      `json:"type"` // "text", "tool_call", "tool_result", "error", "done"
-	Content string      `json:"content,omitempty"`
-	Name    string      `json:"name,omitempty"`
-	Args    interface{} `json:"args,omitempty"`
-	Result  interface{} `json:"result,omitempty"`
+	Type         string      `json:"type"` // "text", "tool_call", "tool_result", "error", "done", "ui_blocks", "ui_update"
+	Content      string      `json:"content,omitempty"`
+	Name         string      `json:"name,omitempty"`
+	Args         interface{} `json:"args,omitempty"`
+	Result       interface{} `json:"result,omitempty"`
+	Blocks       interface{} `json:"blocks,omitempty"`       // UI content blocks for "ui_blocks" and "tool_result"
+	ReplaceIndex int         `json:"replaceIndex,omitempty"` // Block index to replace for "ui_update"
 }
 
 // HealthResponse is the health check response
@@ -88,7 +93,7 @@ type ToolsResponse struct {
 }
 
 // NewServer creates a new API server
-func NewServer(cfg *config.Config, llmProvider llm.Provider, mcpHost *mcp.Host, modeManager *mode.Manager, yt *youtube.Service, radioEngine *radio.Engine, radioTools *radio.ToolHandlers, cartManager *cart.Manager, cartTools *cart.ToolHandlers, quickcomClient *quickcom.Client) *Server {
+func NewServer(cfg *config.Config, llmProvider llm.Provider, mcpHost *mcp.Host, modeManager *mode.Manager, yt *youtube.Service, radioEngine *radio.Engine, radioTools *radio.ToolHandlers, cartManager *cart.Manager, cartTools *cart.ToolHandlers, quickcomClient *quickcom.Client, modelsCache *modelcache.Cache) *Server {
 	return &Server{
 		config:         cfg,
 		llmProvider:    llmProvider,
@@ -100,6 +105,7 @@ func NewServer(cfg *config.Config, llmProvider llm.Provider, mcpHost *mcp.Host, 
 		cartManager:    cartManager,
 		cartTools:      cartTools,
 		quickcomClient: quickcomClient,
+		modelsCache:    modelsCache,
 		done:           make(chan struct{}),
 	}
 }
@@ -153,6 +159,7 @@ func (s *Server) Start() error {
 
 	// Register routes
 	mux.HandleFunc("POST /api/v1/chat", s.handleChat)
+	mux.HandleFunc("POST /api/v1/action", s.handleAction)
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	mux.HandleFunc("GET /api/v1/tools", s.handleTools)
 	mux.HandleFunc("GET /api/v1/modes", s.handleGetModes)
@@ -194,6 +201,11 @@ func (s *Server) Start() error {
 	// Provider endpoints
 	mux.HandleFunc("GET /api/v1/providers", s.handleGetProviders)
 	mux.HandleFunc("GET /api/v1/providers/{name}/models", s.handleGetProviderModels)
+
+	// Model metadata cache endpoint (for Flutter app caching)
+	if s.modelsCache != nil {
+		mux.HandleFunc("GET /api/v1/models", s.handleGetModelsCache)
+	}
 
 	// Wrap with middleware
 	handler := s.logMiddleware(mux)
@@ -445,7 +457,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Use a detached context so tool execution completes even if client disconnects
 	ctx, ctxCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer ctxCancel()
+	startTime := time.Now()
 	var assistantResponse string
+	var lastResponse *llm.Response
 
 	// Chat loop with tool calling
 	const maxToolIterations = 10
@@ -563,12 +577,30 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
-				// Send tool result event
+				// Send tool result event with formatted UI blocks if available
+				blocks := results.FormatResult(toolCall.Function.Name, result, args)
 				s.sendSSE(w, flusher, SSEEvent{
 					Type:   "tool_result",
 					Name:   toolCall.Function.Name,
 					Result: result,
+					Blocks: blocks,
 				})
+
+				// If result contains RichContentItem with component/image types, send ui_blocks
+				if richItems, ok := result.([]mcp.RichContentItem); ok {
+					var blocks []llm.ComponentBlock
+					for _, item := range richItems {
+						if item.Type == "component" {
+							if dataMap, ok := item.Data.(map[string]interface{}); ok {
+								compType, _ := dataMap["type"].(string)
+								blocks = append(blocks, llm.ComponentBlock{Type: compType, Data: dataMap})
+							}
+						}
+					}
+					if len(blocks) > 0 {
+						s.sendSSE(w, flusher, SSEEvent{Type: "ui_blocks", Blocks: blocks})
+					}
+				}
 
 				// Add assistant message with tool call to history
 				history = append(history, llm.Message{
@@ -594,10 +626,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// No tool calls, we have the final text response
+		lastResponse = response
 		if response.Text != "" {
 			assistantResponse = response.Text
-			slog.Info("LLM response", "text", response.Text)
-			s.sendSSE(w, flusher, SSEEvent{Type: "text", Content: response.Text})
+			// Extract UI component blocks from the response text
+			blocks, remaining := llm.ExtractComponentBlocks(response.Text)
+			if len(blocks) > 0 {
+				slog.Info("Extracted UI component blocks", "count", len(blocks))
+				s.sendSSE(w, flusher, SSEEvent{Type: "ui_blocks", Blocks: blocks})
+			}
+			textContent := remaining
+			if textContent == "" {
+				textContent = response.Text
+			}
+			slog.Info("LLM response", "text", textContent)
+			s.sendSSE(w, flusher, SSEEvent{Type: "text", Content: textContent})
 		}
 		break
 	}
@@ -611,6 +654,52 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			Timestamp: time.Now(),
 		})
 		conv.mu.Unlock()
+	}
+
+	// Send metadata event with token usage, model info, pricing
+	if lastResponse != nil {
+		latencyMs := time.Since(startTime).Milliseconds()
+		enrichedName := lastResponse.Model
+		var promptPrice, completionPrice, estimatedCost string
+
+		if s.modelsCache != nil {
+			modelID := lastResponse.Model
+			// Infer the actual provider from the model name; the rotating provider
+			// returns "rotating" but we need "gemini"/"groq"/etc. for enrichment.
+			providerName := inferProvider(provider.Name(), modelID)
+			meta := modelcache.EnrichModel(providerName, modelID, s.modelsCache)
+			// Try with "models/" prefix if direct lookup failed
+			if meta == nil && !strings.HasPrefix(modelID, "models/") {
+				meta = modelcache.EnrichModel(providerName, "models/"+modelID, s.modelsCache)
+			}
+			if meta != nil {
+				enrichedName = meta.DisplayName
+				promptPrice = meta.PromptPrice
+				completionPrice = meta.CompletionPrice
+				// Calculate estimated cost
+				if meta.PromptPrice != "" && meta.CompletionPrice != "" {
+					pPrompt := parsePrice(meta.PromptPrice)
+					pComp := parsePrice(meta.CompletionPrice)
+					cost := (float64(lastResponse.PromptTokens)*pPrompt + float64(lastResponse.CompletionTokens)*pComp) / 1000.0
+					if cost > 0 {
+						estimatedCost = fmt.Sprintf("%.6f", cost)
+					}
+				}
+			}
+		}
+
+		s.sendSSE(w, flusher, SSEEvent{Type: "metadata", Result: map[string]interface{}{
+			"model":              lastResponse.Model,
+			"enriched_name":      enrichedName,
+			"finish_reason":      lastResponse.FinishReason,
+			"prompt_tokens":      lastResponse.PromptTokens,
+			"completion_tokens":  lastResponse.CompletionTokens,
+			"total_tokens":       lastResponse.TotalTokens,
+			"latency_ms":         latencyMs,
+			"prompt_price":       promptPrice,
+			"completion_price":   completionPrice,
+			"estimated_cost":     estimatedCost,
+		}})
 	}
 
 	// Send done event
@@ -633,6 +722,38 @@ func (s *Server) getOrCreateConversation(id string) *Conversation {
 	}
 	s.conversations.Store(id, conv)
 	return conv
+}
+
+// inferProvider deduces the LLM provider from the model ID when the top-level
+// provider is "rotating". Tries the known provider name first; if that's
+// "rotating", guesses via model ID prefixes.
+func inferProvider(providerName, modelID string) string {
+	if providerName != "rotating" {
+		return providerName
+	}
+	id := strings.ToLower(modelID)
+	switch {
+	case strings.Contains(id, "gemini") || strings.Contains(id, "gemma"):
+		return "gemini"
+	case strings.Contains(id, "llama") || strings.Contains(id, "qwen") || strings.Contains(id, "moonshot"):
+		return "groq"
+	case strings.Contains(id, "cerebras"):
+		return "cerebras"
+	case strings.Contains(id, "claude"):
+		return "anthropic"
+	default:
+		return providerName
+	}
+}
+
+// parsePrice parses a price string from OpenRouter (e.g. "0.0000003") to float64.
+// Returns 0 on failure so cost calculation degrades gracefully.
+func parsePrice(s string) float64 {
+	var v float64
+	if _, err := fmt.Sscanf(s, "%f", &v); err != nil {
+		return 0
+	}
+	return v
 }
 
 func (s *Server) sendSSE(w http.ResponseWriter, flusher http.Flusher, event SSEEvent) {
@@ -922,10 +1043,16 @@ func (s *Server) handleGetProviders(w http.ResponseWriter, r *http.Request) {
 
 	response := map[string]interface{}{
 		"providers": providers,
-		"current": map[string]string{
-			"provider": s.llmProvider.Name(),
+	}
+
+	// Only return current provider/model if it's a concrete provider
+	// (not an internal meta-provider like "rotating")
+	name := s.llmProvider.Name()
+	if name != "rotating" {
+		response["current"] = map[string]string{
+			"provider": name,
 			"model":    s.llmProvider.GetModel(),
-		},
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1007,6 +1134,46 @@ func (s *Server) handleGetProviderModels(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if s.modelsCache != nil {
+		for i := range models {
+			meta := modelcache.EnrichModel(providerName, models[i].ID, s.modelsCache)
+			if meta != nil {
+				models[i].DisplayName = meta.DisplayName
+				models[i].Description = meta.Description
+				models[i].ContextSize = meta.ContextLength
+				models[i].PromptPrice = meta.PromptPrice
+				models[i].CompletePrice = meta.CompletionPrice
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"models": models})
+}
+
+// handleGetModelsCache returns the full model metadata cache for Flutter app.
+// Sets ETag for flutter_cache_manager's If-None-Match revalidation.
+func (s *Server) handleGetModelsCache(w http.ResponseWriter, r *http.Request) {
+	if s.modelsCache == nil {
+		http.Error(w, "Model cache not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	data, etag, err := s.modelsCache.ExportJSON()
+	if err != nil {
+		slog.Error("Failed to export model cache", "error", err)
+		http.Error(w, "Failed to export model cache", http.StatusInternalServerError)
+		return
+	}
+
+	// flutter_cache_manager uses If-None-Match for conditional revalidation
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Write(data)
 }

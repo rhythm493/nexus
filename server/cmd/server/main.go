@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -18,9 +19,11 @@ import (
 	"github.com/rhythm493/pocket-assistant/server/internal/llm"
 	"github.com/rhythm493/pocket-assistant/server/internal/mcp"
 	"github.com/rhythm493/pocket-assistant/server/internal/mdns"
+	modelcache "github.com/rhythm493/pocket-assistant/server/internal/models"
 	"github.com/rhythm493/pocket-assistant/server/internal/mode"
 	"github.com/rhythm493/pocket-assistant/server/internal/quickcom"
 	"github.com/rhythm493/pocket-assistant/server/internal/radio"
+	_ "github.com/rhythm493/pocket-assistant/server/internal/tools/results"
 	"github.com/rhythm493/pocket-assistant/server/internal/websearch"
 	"github.com/rhythm493/pocket-assistant/server/internal/youtube"
 )
@@ -146,6 +149,20 @@ func main() {
 		defer lib.Close()
 	}
 
+	// Initialize model metadata cache from OpenRouter
+	modelCachePath := cfg.Library.DatabasePath
+	if modelCachePath != "" {
+		modelCachePath = filepath.Dir(modelCachePath) + "/model_metadata.db"
+	}
+	modelCache, err := modelcache.NewCache(modelCachePath)
+	if err != nil {
+		slog.Warn("Model metadata cache not available", "error", err)
+		modelCache = nil
+	} else {
+		defer modelCache.Close()
+		go modelCache.StartSync(ctx)
+	}
+
 	// Initialize YouTube service (optional)
 	var ytService *youtube.Service
 	if cfg.YouTube.Enabled {
@@ -230,7 +247,7 @@ func main() {
 		quickcomClient = quickcomBridge.Client()
 	}
 
-	server := api.NewServer(cfg, llmProvider, mcpHost, modeManager, ytService, radioEngine, radioTools, cartManager, cartTools, quickcomClient)
+	server := api.NewServer(cfg, llmProvider, mcpHost, modeManager, ytService, radioEngine, radioTools, cartManager, cartTools, quickcomClient, modelCache)
 
 	// Start mDNS advertisement
 	mdnsServer, err := mdns.Advertise(cfg.ServiceName, cfg.Port)
