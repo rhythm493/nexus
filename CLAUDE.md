@@ -19,6 +19,8 @@ Voice-controlled agentic AI assistant connecting phone to PC via LAN. Rotating L
 | Grocery Mode | ✅ Working | L4 agentic: cart system, price comparison, Blinkit + Instamart + Zepto |
 | CLIProxyAPI | ✅ Working | Gemini 3 Flash via free API key, auto-fallback to Groq/Cerebras |
 | QuickCom | ✅ Working | Refactored: REST API, provider pattern, TypeScript, SQLite cache |
+| Model Cache | ✅ Working | OpenRouter model metadata synced on startup, enriched with context length + pricing |
+| Chat Metadata | ✅ Working | Per-response token usage, pricing, latency, finish reason — displayed in expandable bubble footer + input bar |
 
 ## Key Architecture Decisions
 - **radio_play is self-sufficient**: One call = search + download + stream + auto-connect Sonos
@@ -81,25 +83,26 @@ flutter run
 │  │  │  (LLM)       │  │  (tools)     │  │   TLS        │  │  │
 │  │  └──────────────┘  └──────────────┘  └──────────────┘  │  │
 │  │                           │                            │  │
-│  │  ┌──────────────┐  ┌──────────────┴──────────────┐     │  │
-│  │  │  Radio       │  │         MCP Servers         │     │  │
-│  │  │  Engine      │  │  ┌────────┐  ┌──────────┐   │     │  │
-│  │  └──────┬───────┘  │  │ Sonos  │  │ Future   │   │     │  │
-│  │         │          │  │(60+tools│  │ Servers  │   │     │  │
-│  │  ┌──────▼───────┐  │  └────────┘  └──────────┘   │     │  │
-│  │  │  Library     │  └─────────────────────────────┘     │  │
-│  │  │  (SQLite)    │                                      │  │
+│  │  ┌──────────────┐  ┌──────┴──────────────┐             │  │
+│  │  │  Model       │  │     MCP Servers     │             │  │
+│  │  │  Cache       │  │  ┌────────┐  ┌────┐ │             │  │
+│  │  │  (SQLite)    │  │  │ Sonos  │  │ ...│ │             │  │
+│  │  │  OpenRouter  │  │  │(60+tls)│  │    │ │             │  │
+│  │  └──────────────┘  │  └────────┘  └────┘ │             │  │
+│  │  ┌──────────────┐  └─────────────────────┘             │  │
+│  │  │  Radio       │                                      │  │
+│  │  │  Engine      │                                      │  │
 │  │  └──────┬───────┘                                      │  │
 │  │         │                                              │  │
 │  │  ┌──────▼───────┐  ┌──────────────┐                    │  │
-│  │  │  YouTube     │  │  Liquidsoap  │                    │  │
-│  │  │  (yt-dlp)    │  │  (crossfade) │                    │  │
-│  │  └──────────────┘  └──────┬───────┘                    │  │
-│  │                           │                            │  │
-│  │                    ┌──────▼───────┐                    │  │
-│  │                    │ HTTP :8080   │◀── Sonos tunes once│  │
-│  │                    │ /stream      │    (Icy-Metadata)  │  │
-│  │                    └──────────────┘                    │  │
+│  │  │  Library     │  │  Liquidsoap  │                    │  │
+│  │  │  (SQLite)    │  │  (crossfade) │                    │  │
+│  │  └──────┬───────┘  └──────┬───────┘                    │  │
+│  │         │                │                             │  │
+│  │  ┌──────▼───────┐  ┌────▼───────┐                      │  │
+│  │  │  YouTube     │  │ HTTP :8080 │◀── Sonos tunes once  │  │
+│  │  │  (yt-dlp)    │  │  /stream   │    (Icy-Metadata)    │  │
+│  │  └──────────────┘  └────────────┘                      │  │
 │  └────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -128,9 +131,10 @@ nexus/
 │   │   ├── api/                 # HTTP handlers + SSE streaming
 │   │   ├── binutil/             # yt-dlp binary management
 │   │   ├── library/             # SQLite track storage + FTS5 search
-│   │   ├── llm/                 # Groq API client (OpenAI-compatible)
+│   │   ├── llm/                 # Groq/Gemini/Cerebras API client (OpenAI-compatible)
 │   │   ├── mcp/                 # MCP host, transport, protocol
 │   │   ├── mdns/                # Service discovery
+│   │   ├── models/              # OpenRouter model cache + SQLite + enricher
 │   │   ├── radio/               # Liquidsoap engine, queue, tools
 │   │   ├── tls/                 # TLS certificate handling
 │   │   └── youtube/             # YouTube search + download
@@ -184,6 +188,7 @@ log_level: info
 | `RADIO_STREAM_PORT` | No | 8080 | HTTP stream port |
 | `LIBRARY_DATA_DIR` | No | ./data/library | Audio file storage |
 | `LIBRARY_DATABASE_PATH` | No | ./data/library.db | SQLite database |
+| `NEXUS_SERVER_URL` | No (app) | duckdns.org prod URL | Flutter `--dart-define` for dev server URL |
 
 ## API Endpoints
 
@@ -192,6 +197,8 @@ log_level: info
 | POST | `/api/v1/chat` | Send message, receive SSE stream |
 | GET | `/api/v1/health` | Health check + MCP server list |
 | GET | `/api/v1/tools` | List available MCP tools |
+| GET | `/api/v1/providers` | List available LLM providers |
+| GET | `/api/v1/providers/{name}/models` | List models for a provider (enriched with context size, pricing from OpenRouter cache) |
 | GET | `/api/v1/conversations/:id` | Get conversation history |
 | GET | `/api/v1/youtube/search?q=` | Search YouTube, return video info |
 | POST | `/api/v1/youtube/download` | Download audio from YouTube |
@@ -459,6 +466,8 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 | Radio tools | `server/internal/radio/tools.go` |
 | Liquidsoap config | `server/scripts/radio.liq` |
 | Library database | `server/internal/library/db.go` |
+| Model metadata cache | `server/internal/models/cache.go` |
+| Model ID enricher | `server/internal/models/enricher.go` |
 | YouTube download | `server/internal/youtube/downloader.go` |
 | yt-dlp management | `server/internal/binutil/ytdlp.go` |
 | mDNS advertisement | `server/internal/mdns/advertise.go` |
@@ -477,6 +486,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 | MCP Transport | stdio | Standard, works with all MCP servers |
 | Audio Streaming | Liquidsoap | Crossfade, normalization, Icy-Metadata |
 | Song Cache | SQLite + FTS5 | Fast local search, no external deps |
+| Model Metadata | OpenRouter API | Fetch context length + pricing on startup, cache in SQLite |
 | Audio Format | opus/m4a | Native YouTube format, no transcode |
 
 ## Dependencies
@@ -485,7 +495,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 - `gopkg.in/yaml.v3` - Config parsing
 - `github.com/google/uuid` - UUID generation
 - `github.com/hashicorp/mdns` - mDNS advertisement
-- `modernc.org/sqlite` - Pure Go SQLite driver (no CGO)
+- `modernc.org/sqlite` - Pure Go SQLite driver (no CGO) — used by library + model cache
 
 ### App (Flutter)
 - `sherpa_onnx: ^1.12.23` - Offline speech recognition
@@ -557,6 +567,27 @@ QuickCom (Node.js, separate service)
 | Instamart | SPA navigation + response capture | Yes (for search) |
 
 ## Changelog
+
+### 2026-05-09 (Chat Metadata + Flutter Model Cache)
+- **Metadata SSE event**: New `"metadata"` event emitted before `"done"` with `model`, `enriched_name`, `finish_reason`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `latency_ms`, `prompt_price`, `completion_price`, `estimated_cost`
+- **`GET /api/v1/models` endpoint**: Returns full model cache + provider mappings as JSON with `ETag` header for conditional revalidation — consumed by Flutter's `flutter_cache_manager`
+- **Flutter model cache**: New `ModelCacheService` using `flutter_cache_manager.getSingleFile(url)` — automatic ETag-based revalidation, no manual hash/storage management. Caches 367 models in local disk cache
+- **Model info bar**: New `ModelInfoBar` widget above chat input showing current model display name + context size (e.g. "Google: Gemini 2.5 Flash · 1M ctx")
+- **Expandable bubble metadata**: `_AssistantBubble` now has a "Show details" / "Hide details" toggle revealing tokens in/out, latency, estimated cost, and finish reason warnings
+- **Truncation retry**: When `finish_reason` is `"length"`, a warning + "Continue" button appears on the bubble — sends a hidden "Continue from where you left off" message
+- **Model switch detection**: When a response uses a different model than the previous turn, a `"Switched to ..."` system divider is inserted between messages
+- **Pricing enrichment**: Server looks up prompt/completion pricing from model cache and calculates estimated cost per response. Provider inferred from model name when using rotating provider
+- **New files**: `app/lib/models/chat_metadata.dart`, `app/lib/services/model_cache_service.dart`, `app/lib/widgets/model_info_bar.dart`
+- **Dependency**: Added `flutter_cache_manager: ^3.4.1`
+
+### 2026-05-09 (Model Metadata Enrichment)
+- **OpenRouter model cache**: New `internal/models/` package fetches `openrouter.ai/api/v1/models` on startup, stores 367 models with context length + pricing in SQLite
+- **Model enricher**: Maps provider model IDs (Gemini/Groq/Cerebras) to OpenRouter IDs for display name, context size, and pricing enrichment
+- **Enriched model responses**: `/api/v1/providers/{name}/models` now returns `display_name`, `description`, `context_size`, `prompt_price`, `completion_price` per model
+- **Flutter model dropdown**: Shows human-readable display name + context size subtitle (e.g. "Google: Gemini 2.5 Flash · 1M ctx")
+- **NEXUS_SERVER_URL**: Flutter app reads dev server URL from `--dart-define`, configured via `.env` + `make app`
+- **Provider list fix**: `/api/v1/providers` no longer returns `rotating` as a selectable current provider
+- **New files**: `server/internal/models/cache.go`, `server/internal/models/enricher.go`
 
 ### 2026-03-19 (Grocery v0.2)
 - **go-openai SDK migration**: Replaced hand-rolled HTTP with `sashabaranov/go-openai`, adapter pattern

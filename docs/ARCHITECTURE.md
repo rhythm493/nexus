@@ -22,17 +22,17 @@ pocket-assistant is a voice-controlled AI assistant that connects a mobile phone
 │  ┌────────────────────────────────────────────────────────┐  │
 │  │                    Orchestrator                        │  │
 │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │  │
-│  │  │ Gemini API   │  │  MCP Host    │  │   mDNS +     │  │  │
-│  │  │ Client       │  │  (spawns     │  │   mTLS       │  │  │
-│  │  │              │  │   servers)   │  │   Server     │  │  │
+│  │  │ LLM Provider │  │  MCP Host    │  │   mDNS +     │  │  │
+│  │  │ (Gemini/Groq │  │  (spawns     │  │   mTLS       │  │  │
+│  │  │  /Cerebras)  │  │   servers)   │  │   Server     │  │  │
 │  │  └──────────────┘  └──────────────┘  └──────────────┘  │  │
 │  │                           │                            │  │
-│  │              ┌────────────┴────────────┐               │  │
-│  │              ▼                         ▼               │  │
-│  │     ┌──────────────┐          ┌──────────────┐         │  │
-│  │     │  Sonos MCP   │          │  Future MCP  │         │  │
-│  │     │  (stdio)     │          │  Servers...  │         │  │
-│  │     └──────────────┘          └──────────────┘         │  │
+│  │  ┌──────────────┐  ┌─────┴─────────────┐               │  │
+│  │  │  Model       │  │    MCP Servers    │               │  │
+│  │  │  Cache       │  │ ┌────────┐ ┌────┐ │               │  │
+│  │  │  (SQLite)    │  │ │ Sonos  │ │ ...│ │               │  │
+│  │  │  OpenRouter  │  │ └────────┘ └────┘ │               │  │
+│  │  └──────────────┘  └───────────────────┘               │  │
 │  └────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -74,11 +74,35 @@ pocket-assistant is a voice-controlled AI assistant that connects a mobile phone
 **Key Packages:**
 | Package | Purpose |
 |---------|---------|
-| `internal/api` | HTTP handlers, SSE streaming |
-| `internal/gemini` | Gemini API client with function calling |
+| `internal/api` | HTTP handlers, SSE streaming, metadata enrichment per-chat |
+| `internal/llm` | LLM provider abstraction (Gemini/Groq/Cerebras/Ollama), rotating fallback |
+| `internal/models` | OpenRouter model metadata cache + SQLite + provider ID enricher |
 | `internal/mcp` | MCP host, protocol, stdio transport |
 | `internal/mdns` | mDNS service advertisement |
 | `internal/tls` | mTLS configuration |
+
+**Chat Metadata Flow:**
+1. LLM responds with token counts, model name, finish reason
+2. Server enriches model name + pricing from cache
+3. `"metadata"` SSE event emitted before `"done"` with all fields
+4. Flutter attaches metadata to the final `Message` object
+5. `_AssistantBubble` shows expandable footer with tokens, latency, cost
+6. Truncated responses (`finish_reason: "length"`) show "Continue" retry button
+
+**Flutter Services:**
+| Service | Purpose |
+|---------|---------|
+| `ApiService` | HTTP + SSE client, chat requests |
+| `ModelCacheService` | Downloads model metadata from `GET /api/v1/models` via `flutter_cache_manager`, provides `lookup()` and `getModelsForProvider()` |
+| `SettingsService` | Provider/model selection, reads from ModelCacheService when available |
+| `VoiceService` | Voice input via sherpa-onnx |
+
+**Model Cache Protocol:**
+```
+Server (model_metadata.db) ──▶ GET /api/v1/models ──▶ Flutter flutter_cache_manager
+  SQLite, refreshed every 12h     ETag: <sha256>         getSingleFile(url)
+                                Cache-Control: 3600       auto If-None-Match / 304
+                                                          disk cache, no manual storage
 
 ### MCP Integration
 

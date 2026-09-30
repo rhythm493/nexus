@@ -7,9 +7,9 @@ all: help
 server:
 	cd server && go run ./cmd/server
 
-# Run the Flutter app
+# Run the Flutter app (reads NEXUS_SERVER_URL from ../.env)
 app:
-	cd app && flutter run
+	GRADLE_USER_HOME=$$(pwd)/.gradle-home cd app && flutter run --dart-define=NEXUS_SERVER_URL=$(shell grep NEXUS_SERVER_URL .env | cut -d= -f2-)
 
 # Build the Go server
 build-server:

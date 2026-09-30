@@ -141,6 +141,15 @@ import '../models/message.dart';
 - **Tool results capped at 2KB** — truncate large outputs
 - **Filter ALL 172.x.x.x IPs** — Docker uses various subnets
 - **SSE events** — line-buffer in Flutter parser (large events can span TCP chunks)
+- **Model metadata from OpenRouter** — `server/internal/models/cache.go` fetches on startup, caches in SQLite, refreshes every 12h. Provider model IDs mapped in `server/internal/models/enricher.go`
+- **`GET /api/v1/models`** — Returns full model cache + provider mappings as JSON with `ETag` header. Used by Flutter's `flutter_cache_manager` for conditional revalidation
+- **Chat SSE includes `"metadata"` event** — Emitted before `"done"` with `model`, `enriched_name`, `finish_reason`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `latency_ms`, `prompt_price`, `completion_price`, `estimated_cost`
+- **Flutter model cache** — Uses `flutter_cache_manager` with automatic ETag-based revalidation. `ModelCacheService` provides `lookup(provider, modelId)` and `getModelsForProvider(provider)` with the same fuzzy-matching logic as server-side enricher
+- **`model_cache_service.dart`** — Downloads model cache via `DefaultCacheManager().getSingleFile(url)` on app startup/reconnect. Auto-refreshes when server data changes
+- **`_AssistantBubble` has expandable metadata** — Shows "Show details" / "Hide details" button that reveals token count, latency, cost, and finish reason warnings. Truncated responses show a "Continue" retry button
+- **Model info bar** — `ModelInfoBar` widget above chat input shows current model display name + context size
+- **Model switch detection** — When a response uses a different model than the previous turn, a `"Switched to ..."` system divider is inserted
+- **`make app` passes `--dart-define`** — reads `NEXUS_SERVER_URL` from `../.env` for dev server URL
 - **No test files exist yet** — when adding tests, follow `*_test.go` / `*_test.dart` conventions
 - **After editing Go code**, run `cd server && go build ./...` to verify compilation
 - **After editing Dart code**, run `cd app && flutter analyze` to verify no errors
