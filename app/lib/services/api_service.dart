@@ -9,8 +9,12 @@ import '../models/message.dart';
 
 const Duration _defaultTimeout = Duration(seconds: 30);
 const Duration _healthCheckTimeout = Duration(seconds: 5);
-const String _defaultServerUrl = 'https://pocket-assistant-nexus.duckdns.org';
+const String _defaultServerUrl = String.fromEnvironment(
+  'NEXUS_SERVER_URL',
+  defaultValue: 'https://pocket-assistant-nexus.duckdns.org',
+);
 const String _savedServerKey = 'nexus_saved_server_url';
+const String _savedDefaultKey = 'nexus_saved_default_url';
 
 /// Service for communicating with the Nexus server
 class ApiService extends ChangeNotifier {
@@ -42,30 +46,28 @@ class ApiService extends ChangeNotifier {
 
   void _setupClient() {
     _client = HttpClient();
-    // Use proper HTTPS validation (no longer accepting self-signed certs)
   }
 
-  /// Load saved server URL and auto-connect
   Future<void> _loadSavedServer() async {
     final savedUrl = _prefs?.getString(_savedServerKey);
-    if (savedUrl != null && savedUrl.isNotEmpty) {
-      _baseUrl = savedUrl;
-      _conversationId = const Uuid().v4();
-      notifyListeners();
-      // Auto-connect to saved server
-      await checkHealth();
-    } else {
-      // Set default server URL
+    final savedDefault = _prefs?.getString(_savedDefaultKey);
+
+    if (savedUrl == null || savedUrl.isEmpty || savedDefault != _defaultServerUrl) {
       setServer(_defaultServerUrl);
+      return;
     }
+
+    _baseUrl = savedUrl;
+    _conversationId = const Uuid().v4();
+    notifyListeners();
+    await checkHealth();
   }
 
-  /// Save server URL to persistent storage
   Future<void> _saveServer(String url) async {
     await _prefs?.setString(_savedServerKey, url);
+    await _prefs?.setString(_savedDefaultKey, _defaultServerUrl);
   }
 
-  /// Set the server URL
   void setServer(String url) {
     _baseUrl = url;
     _conversationId = const Uuid().v4();
@@ -73,26 +75,22 @@ class ApiService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Reset to default server URL
   Future<void> resetToDefault() async {
     setServer(_defaultServerUrl);
     await checkHealth();
   }
 
-  /// Set provider override for chat requests
   void setProviderOverride(String? provider, String? model) {
     _overrideProvider = provider;
     _overrideModel = model;
     notifyListeners();
   }
 
-  /// Set the current mode for chat requests
   void setMode(String? mode) {
     _selectedMode = mode;
     notifyListeners();
   }
 
-  /// Check server health
   Future<bool> checkHealth() async {
     if (_baseUrl == null) {
       _error = 'Server not configured';
@@ -165,13 +163,11 @@ class ApiService extends ChangeNotifier {
         return;
       }
 
-      // Check for new conversation ID
       final newConvId = response.headers.value('X-Conversation-ID');
       if (newConvId != null) {
         _conversationId = newConvId;
       }
 
-      // Parse SSE stream with idle timeout — if no data for 30 seconds, close
       final sseStream = response.transform(utf8.decoder).timeout(
         _defaultTimeout,
         onTimeout: (sink) {
@@ -180,13 +176,10 @@ class ApiService extends ChangeNotifier {
         },
       );
 
-      // Buffer partial lines across TCP chunks — large SSE events (cart_update)
-      // can span multiple chunks and must be reassembled before JSON parsing.
       String lineBuffer = '';
       await for (final chunk in sseStream) {
         lineBuffer += chunk;
         final lines = lineBuffer.split('\n');
-        // Keep the last element (may be incomplete) in the buffer
         lineBuffer = lines.removeLast();
         for (final line in lines) {
           if (line.startsWith('data: ')) {
@@ -195,13 +188,11 @@ class ApiService extends ChangeNotifier {
               final json = jsonDecode(data) as Map<String, dynamic>;
               yield SSEEvent.fromJson(json);
             } catch (e) {
-              // Skip malformed lines
               debugPrint('[SSE] Parse error: $e (line length: ${data.length})');
             }
           }
         }
       }
-      // Process any remaining data in buffer
       if (lineBuffer.startsWith('data: ')) {
         try {
           final json = jsonDecode(lineBuffer.substring(6)) as Map<String, dynamic>;
@@ -215,7 +206,62 @@ class ApiService extends ChangeNotifier {
     }
   }
 
-  /// Get available tools
+  /// Send an action (from interactive component) to the server.
+  ///
+  /// Returns an SSE stream with the action result.
+  Stream<SSEEvent> sendAction(String action, Map<String, dynamic>? args) async* {
+    if (_baseUrl == null) {
+      yield SSEEvent(type: 'error', content: 'Not connected');
+      return;
+    }
+
+    try {
+      final uri = Uri.parse('$_baseUrl/api/v1/action');
+      final request = await _client!.postUrl(uri);
+
+      request.headers.contentType = ContentType.json;
+      request.write(jsonEncode({
+        'action': action,
+        'args': args ?? {},
+        'conversation_id': _conversationId,
+      }));
+
+      final response = await request.close();
+
+      if (response.statusCode != 200) {
+        yield SSEEvent(type: 'error', content: 'Action failed: ${response.statusCode}');
+        return;
+      }
+
+      final sseStream = response.transform(utf8.decoder).timeout(
+        const Duration(seconds: 15),
+        onTimeout: (sink) {
+          sink.addError(TimeoutException('Action stream idle for 15 seconds'));
+          sink.close();
+        },
+      );
+
+      String lineBuffer = '';
+      await for (final chunk in sseStream) {
+        lineBuffer += chunk;
+        final lines = lineBuffer.split('\n');
+        lineBuffer = lines.removeLast();
+        for (final line in lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              final json = jsonDecode(line.substring(6)) as Map<String, dynamic>;
+              yield SSEEvent.fromJson(json);
+            } catch (e) {
+              debugPrint('[Action] Parse error: $e');
+            }
+          }
+        }
+      }
+    } catch (e) {
+      yield SSEEvent(type: 'error', content: 'Action request failed: $e');
+    }
+  }
+
   Future<List<dynamic>?> getTools() async {
     if (_baseUrl == null) return null;
 
@@ -235,13 +281,11 @@ class ApiService extends ChangeNotifier {
     return null;
   }
 
-  /// Start a new conversation
   void newConversation() {
     _conversationId = const Uuid().v4();
     notifyListeners();
   }
 
-  /// Disconnect from server
   void disconnect() {
     _isConnected = false;
     _baseUrl = null;

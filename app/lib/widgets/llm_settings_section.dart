@@ -55,6 +55,7 @@ class _LLMSettingsSectionState extends State<LLMSettingsSection> {
 
                 // Provider dropdown
                 DropdownButtonFormField<String>(
+                  isExpanded: true,
                   initialValue: settings.selectedProvider,
                   decoration: const InputDecoration(
                     labelText: 'Provider',
@@ -81,6 +82,7 @@ class _LLMSettingsSectionState extends State<LLMSettingsSection> {
                 // Model dropdown
                 if (settings.selectedProvider != null) ...[
                   DropdownButtonFormField<String>(
+                    isExpanded: true,
                     initialValue: settings.selectedModel,
                     decoration: const InputDecoration(
                       labelText: 'Model',
@@ -90,9 +92,25 @@ class _LLMSettingsSectionState extends State<LLMSettingsSection> {
                     items: settings.availableModels.map((model) {
                       return DropdownMenuItem(
                         value: model.id,
-                        child: Text(
-                          model.name,
-                          overflow: TextOverflow.ellipsis,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              model.displayLabel,
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                            ),
+                            if (model.subtitle != null)
+                              Text(
+                                model.subtitle!,
+                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                                maxLines: 1,
+                              ),
+                          ],
                         ),
                       );
                     }).toList(),

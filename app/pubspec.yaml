@@ -35,6 +35,9 @@ dependencies:
   # File picker for cert import
   file_picker: ^8.0.0
 
+  # Model metadata cache with ETag-based revalidation
+  flutter_cache_manager: ^3.4.1
+
   # Permissions
   permission_handler: ^12.0.0
 
@@ -50,6 +53,19 @@ dependencies:
 
   # Shimmer loading effect
   shimmer: ^3.0.0
+
+  # Markdown rendering for assistant responses
+  flutter_markdown: ^0.7.6
+
+  # Charts for data visualization
+  fl_chart: ^0.70.2
+
+  # Code syntax highlighting
+  flutter_highlight: ^0.7.0
+  highlight: ^0.7.0
+
+  # URL launching for link component
+  url_launcher: ^6.2.6
 
 dev_dependencies:
   flutter_test:

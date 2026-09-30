@@ -4,10 +4,13 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'model_cache_service.dart';
+
 class SettingsService extends ChangeNotifier {
   SharedPreferences? _prefs;
   late final Future<void> _initialized;
   HttpClient? _httpClient;
+  final ModelCacheService? _modelCache;
 
   String? _selectedProvider;
   String? _selectedModel;
@@ -24,7 +27,7 @@ class SettingsService extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get error => _error;
 
-  SettingsService() {
+  SettingsService({ModelCacheService? modelCache}) : _modelCache = modelCache {
     _httpClient = HttpClient(); // Proper HTTPS validation
     _initialized = _init();
   }
@@ -61,10 +64,16 @@ class SettingsService extends ChangeNotifier {
             .map((p) => ProviderInfo.fromJson(p as Map<String, dynamic>))
             .toList();
 
-        if (_selectedProvider == null && json['current'] != null) {
+        if (json['current'] != null) {
           final current = json['current'] as Map<String, dynamic>;
-          _selectedProvider = current['provider'] as String?;
-          _selectedModel = current['model'] as String?;
+          final serverProvider = current['provider'] as String?;
+          // Skip internal providers (e.g. "rotating") not in the selectable list
+          final isValid = serverProvider != null &&
+              _availableProviders.any((p) => p.name == serverProvider);
+          if (isValid) {
+            _selectedProvider ??= serverProvider;
+          }
+          _selectedModel ??= current['model'] as String?;
         }
       } else {
         _error = 'Failed to fetch providers: HTTP ${response.statusCode}';
@@ -79,6 +88,17 @@ class SettingsService extends ChangeNotifier {
 
   Future<void> fetchModels(String baseUrl, String provider) async {
     await _ensureInitialized();
+
+    // Try local cache first
+    if (_modelCache != null && _modelCache!.isLoaded) {
+      final cached = _modelCache!.getModelsForProvider(provider);
+      if (cached != null) {
+        _availableModels = cached;
+        notifyListeners();
+        return;
+      }
+    }
+
     _isLoading = true;
     _error = null;
     notifyListeners();
@@ -161,14 +181,57 @@ class ModelInfo {
   final String id;
   final String name;
   final int? contextSize;
+  final String? displayName;
+  final String? description;
+  final String? promptPrice;
+  final String? completionPrice;
 
-  ModelInfo({required this.id, required this.name, this.contextSize});
+  ModelInfo({
+    required this.id,
+    required this.name,
+    this.contextSize,
+    this.displayName,
+    this.description,
+    this.promptPrice,
+    this.completionPrice,
+  });
 
   factory ModelInfo.fromJson(Map<String, dynamic> json) {
     return ModelInfo(
       id: json['id'] as String,
       name: (json['name'] ?? json['id']) as String,
       contextSize: json['context_size'] as int?,
+      displayName: json['display_name'] as String?,
+      description: json['description'] as String?,
+      promptPrice: json['prompt_price'] as String?,
+      completionPrice: json['completion_price'] as String?,
     );
+  }
+
+  String get displayLabel {
+    if (displayName != null && displayName!.isNotEmpty) {
+      return displayName!;
+    }
+    return name;
+  }
+
+  String? get subtitle {
+    if (contextSize != null && contextSize! > 0) {
+      final ctx = _formatContext(contextSize!);
+      if (promptPrice != null && promptPrice!.isNotEmpty && promptPrice != '0') {
+        return '$ctx · \$$promptPrice/K in';
+      }
+      return ctx;
+    }
+    return null;
+  }
+
+  static String _formatContext(int tokens) {
+    if (tokens >= 1000000) {
+      return '${(tokens / 1000000).toStringAsFixed(0)}M ctx';
+    } else if (tokens >= 1000) {
+      return '${(tokens / 1000).toStringAsFixed(0)}K ctx';
+    }
+    return '$tokens ctx';
   }
 }

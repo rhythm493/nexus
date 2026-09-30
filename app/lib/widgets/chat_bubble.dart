@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
+import '../models/chat_metadata.dart';
 import '../models/message.dart';
 
 class ChatBubble extends StatelessWidget {
   final Message message;
   final bool completed;
+  final VoidCallback? onRetry;
 
-  const ChatBubble({super.key, required this.message, this.completed = false});
+  const ChatBubble({super.key, required this.message, this.completed = false, this.onRetry});
 
   @override
   Widget build(BuildContext context) {
@@ -16,7 +18,7 @@ class ChatBubble extends StatelessWidget {
       case 'user':
         return _UserBubble(message: message, theme: theme);
       case 'assistant':
-        return _AssistantBubble(message: message, theme: theme);
+        return _AssistantBubble(message: message, theme: theme, onRetry: onRetry);
       case 'thinking':
         return _ThinkingBubble(message: message);
       case 'tool_call':
@@ -66,14 +68,26 @@ class _UserBubble extends StatelessWidget {
   }
 }
 
-class _AssistantBubble extends StatelessWidget {
+class _AssistantBubble extends StatefulWidget {
   final Message message;
   final ThemeData theme;
+  final VoidCallback? onRetry;
 
-  const _AssistantBubble({required this.message, required this.theme});
+  const _AssistantBubble({required this.message, required this.theme, this.onRetry});
+
+  @override
+  State<_AssistantBubble> createState() => _AssistantBubbleState();
+}
+
+class _AssistantBubbleState extends State<_AssistantBubble> {
+  bool _isExpanded = false;
 
   @override
   Widget build(BuildContext context) {
+    final theme = widget.theme;
+    final cs = theme.colorScheme;
+    final meta = widget.message.metadata;
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Align(
@@ -83,7 +97,7 @@ class _AssistantBubble extends StatelessWidget {
           margin: const EdgeInsets.only(right: 48),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHighest,
+            color: cs.surfaceContainerHighest,
             borderRadius: const BorderRadius.only(
               topLeft: Radius.circular(16),
               topRight: Radius.circular(16),
@@ -91,12 +105,153 @@ class _AssistantBubble extends StatelessWidget {
               bottomRight: Radius.circular(16),
             ),
           ),
-          child: SelectableText(
-            message.content,
-            style: TextStyle(color: theme.colorScheme.onSurface),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SelectableText(
+                widget.message.content,
+                style: TextStyle(color: cs.onSurface),
+              ),
+              if (meta != null) ...[
+                const SizedBox(height: 4),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () => setState(() => _isExpanded = !_isExpanded),
+                    child: Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _isExpanded ? 'Hide details' : 'Show details',
+                            style: TextStyle(fontSize: 10, color: cs.primary),
+                          ),
+                          Icon(
+                            _isExpanded ? Icons.expand_less : Icons.expand_more,
+                            size: 16,
+                            color: cs.primary,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                if (_isExpanded) ...[
+                  const SizedBox(height: 4),
+                  _MetadataFooter(meta: meta, theme: theme, onRetry: widget.onRetry),
+                ],
+              ],
+            ],
           ),
         ),
       ),
+    );
+  }
+}
+
+class _MetadataFooter extends StatelessWidget {
+  final ChatMetadata meta;
+  final ThemeData theme;
+  final VoidCallback? onRetry;
+
+  const _MetadataFooter({required this.meta, required this.theme, this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = theme.colorScheme;
+    final parts = <Widget>[];
+
+    // Token summary
+    final tokens = meta.tokenSummary;
+    if (tokens != null) {
+      parts.add(_metadataChip(Icons.token, tokens, cs));
+    }
+
+    // Latency
+    final latency = meta.latencySummary;
+    if (latency != null) {
+      parts.add(_metadataChip(Icons.timer_outlined, latency, cs));
+    }
+
+    // Cost
+    final cost = meta.costSummary;
+    if (cost != null) {
+      parts.add(_metadataChip(Icons.attach_money, cost, cs));
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.only(top: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (parts.isNotEmpty)
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: parts,
+            ),
+          // Finish reason warnings
+          if (meta.isTruncated) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Icon(Icons.warning_amber, size: 14, color: Colors.orange[400]),
+                const SizedBox(width: 4),
+                Text(
+                  'Response truncated',
+                  style: TextStyle(fontSize: 11, color: Colors.orange[400]),
+                ),
+                const Spacer(),
+                if (onRetry != null)
+                  TextButton.icon(
+                    onPressed: onRetry,
+                    icon: const Icon(Icons.refresh, size: 14),
+                    label: const Text('Continue', style: TextStyle(fontSize: 11)),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      foregroundColor: cs.primary,
+                    ),
+                  ),
+              ],
+            ),
+          ],
+          if (meta.finishReason == 'content_filter')
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                children: [
+                  Icon(Icons.block, size: 14, color: cs.error),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Blocked by content filter',
+                    style: TextStyle(fontSize: 11, color: cs.error),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _metadataChip(IconData icon, String text, ColorScheme cs) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 11, color: cs.onSurface.withValues(alpha: 0.4)),
+        const SizedBox(width: 3),
+        Text(
+          text,
+          style: TextStyle(fontSize: 10, color: cs.onSurface.withValues(alpha: 0.5)),
+        ),
+      ],
     );
   }
 }
