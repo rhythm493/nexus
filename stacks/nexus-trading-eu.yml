@@ -1,0 +1,91 @@
+# Nexus on trading-eu (Contabo, Lauterbourg FR) -- stacks/nexus-trading-eu.yml
+#
+# Replaces the Traefik deployment on OCI VM1 (130.61.153.164). VM1 is a 1GB
+# E2.1.Micro; the server carries a Chromium-driving backend (QuickCom) plus
+# the LLM fan-out, and does not fit in 1GB alongside the OS.
+#
+# EGRESS IS DELIBERATELY DIRECT (FR) -- Nexus does NOT share QuickCom's
+# Tailscale netns. Its traffic is Groq / Cerebras / Gemini / OpenRouter API
+# calls, which have no reason to leave France, and tunnelling them through
+# Pune would add ~150ms of latency to every token. Only QuickCom needs Indian
+# egress, and it gets it in its own netns via ts-quickcom.
+#
+# CONTAINER-TO-CONTAINER: nexus_net is shared with QuickCom's sidecar, so
+# QUICKCOM_URL is http://ts-quickcom:10000 -- the container name resolves via
+# Docker's embedded DNS to 172.30.0.2, which is the netns that owns the exit
+# node. Nexus reaches QuickCom; QuickCom reaches the internet via the tunnel.
+# This REPLACES the old setup where QuickCom ran on VM2 and Nexus on VM1,
+# which required two separate tailnet hops.
+#
+# DO NOT add `dns: 1.1.1.1` here (the old Traefik stack had it). A public
+# resolver does not know Docker service names, so `ts-quickcom` would fail to
+# resolve and every grocery tool call would break. Docker's embedded DNS is
+# required.
+
+services:
+  nexus:
+    image: nexus:local
+    container_name: nexus
+    restart: unless-stopped
+    environment:
+      # Supplied from /opt/nexus/.env on the host, NOT committed. Note that
+      # OPENROUTER_API_KEY was missing from the old stack file and had to be
+      # added to the VM1 Portainer env by hand; including it here is
+      # deliberate so the rotating provider has all four backends.
+      - GROQ_API_KEY=${GROQ_API_KEY:?GROQ_API_KEY is required}
+      - CEREBRAS_API_KEY=${CEREBRAS_API_KEY:?CEREBRAS_API_KEY is required}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:?GEMINI_API_KEY is required}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}
+      - LLM_PROVIDER=${LLM_PROVIDER:-rotating}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LIBRARY_DATA_DIR=/app/library
+      - LIBRARY_DATABASE_PATH=/app/library/library.db
+      # QuickCom link. Grocery tools are gated on "grocery" mode being
+      # compiled/enabled in the server binary; the URL is read at startup.
+      - QUICKCOM_URL=http://ts-quickcom:10000
+      # radio/youtube off: they need liquidsoap/ffmpeg streams and were not
+      # part of what was running on VM1.
+      - RADIO_ENABLED=false
+      - YOUTUBE_ENABLED=false
+    volumes:
+      - nexus_library-data:/app/library
+      - nexus_mcp-data:/app/mcp-servers
+    networks:
+      nexus_net:
+      # Second leg, purely so mailcow's nginx can reach this container: the
+      # two bridges cannot forward to each other, and nginx already owns
+      # 80/443 on this host. Pinned clear of marketglass (.101) and
+      # ts-arr (.105), and clear of mailcow's own .2-.13/.248-.254.
+      mailcow:
+        ipv4_address: 172.22.1.106
+    # The container itself publishes nothing. It is reached by mailcow's
+    # nginx over the nexus_net bridge, which is why no `ports:` here --
+    # publishing would bypass ufw and expose 8443 directly to the internet.
+    security_opt:
+      - no-new-privileges:true
+    memswap_limit: 2G
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8443/api/v1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+networks:
+  nexus_net:
+    name: nexus_net
+    external: true
+  mailcow:
+    name: mailcowdockerized_mailcow-network
+    external: true
+
+volumes:
+  nexus_library-data:
+    driver: local
+  nexus_mcp-data:
+    driver: local
