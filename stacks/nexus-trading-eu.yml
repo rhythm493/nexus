@@ -52,6 +52,19 @@ services:
       - nexus_mcp-data:/app/mcp-servers
     networks:
       nexus_net:
+        # Pinned deliberately. Docker's automatic allocator hands out the
+        # lowest free address, which is 172.30.0.2 -- and that is exactly the
+        # address QuickCom's sidecar statically reserves. If nexus is ever
+        # recreated while ts-quickcom is down (a host reboot with the sidecar
+        # not yet restarted will do it), nexus squats .2 and ts-quickcom then
+        # fails to start with "Address already in use", which takes grocery
+        # search down. Pinning both ends makes the collision impossible.
+        ipv4_address: 172.30.0.3
+        # Same reasoning for v6: nexus_net is created with enable_ipv6, so an
+        # unpinned nexus is handed the first ULA, which is exactly the
+        # fd00:6e78:7573::2 that ts-quickcom pins for the host-level
+        # kill-switch to target.
+        ipv6_address: fd00:6e78:7573::3
       # Second leg, purely so mailcow's nginx can reach this container: the
       # two bridges cannot forward to each other, and nginx already owns
       # 80/443 on this host. Pinned clear of marketglass (.101) and
