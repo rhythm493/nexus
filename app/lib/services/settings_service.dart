@@ -27,6 +27,7 @@ class SettingsService extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get error => _error;
 
+  // ignore: prefer_initializing_formals -- private field cannot be an initializing formal
   SettingsService({ModelCacheService? modelCache}) : _modelCache = modelCache {
     _httpClient = HttpClient(); // Proper HTTPS validation
     _initialized = _init();
@@ -90,8 +91,8 @@ class SettingsService extends ChangeNotifier {
     await _ensureInitialized();
 
     // Try local cache first
-    if (_modelCache != null && _modelCache!.isLoaded) {
-      final cached = _modelCache!.getModelsForProvider(provider);
+    if (_modelCache != null && _modelCache.isLoaded) {
+      final cached = _modelCache.getModelsForProvider(provider);
       if (cached != null) {
         _availableModels = cached;
         notifyListeners();

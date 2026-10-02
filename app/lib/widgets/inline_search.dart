@@ -46,7 +46,7 @@ class _InlineSearchState extends State<InlineSearch> {
     _showOverlay();
 
     try {
-      final client = HttpClient()..badCertificateCallback = (_, __, ___) => true;
+      final client = HttpClient()..badCertificateCallback = (_, _, _) => true;
       final req = await client.getUrl(Uri.parse('${widget.baseUrl}/api/v1/search?q=${Uri.encodeComponent(query)}'));
       final resp = await req.close();
       if (resp.statusCode != 200) return;
@@ -156,7 +156,7 @@ class _InlineSearchState extends State<InlineSearch> {
               borderRadius: BorderRadius.circular(6),
               child: product.imageUrl.isNotEmpty
                   ? Image.network(product.imageUrl, width: 36, height: 36, fit: BoxFit.cover,
-                      cacheWidth: 72, errorBuilder: (_, __, ___) => _imgPlaceholder(cs))
+                      cacheWidth: 72, errorBuilder: (_, _, _) => _imgPlaceholder(cs))
                   : _imgPlaceholder(cs),
             ),
             const SizedBox(width: 8),

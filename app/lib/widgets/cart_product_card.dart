@@ -56,7 +56,7 @@ class CartProductCard extends StatelessWidget {
                           height: 52,
                           fit: BoxFit.cover,
                           cacheWidth: 104,
-                          errorBuilder: (_, __, ___) => _placeholder(cs),
+                          errorBuilder: (_, _, _) => _placeholder(cs),
                         )
                       : _placeholder(cs),
                 ),

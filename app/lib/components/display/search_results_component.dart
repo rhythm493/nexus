@@ -133,7 +133,7 @@ class _SearchResultsSheet extends StatelessWidget {
                 controller: scrollController,
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                 itemCount: results.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
+                separatorBuilder: (_, _) => const Divider(height: 1),
                 itemBuilder: (context, index) {
                   final result = results[index] as Map<String, dynamic>;
                   return _ResultTile(result: result);

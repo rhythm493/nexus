@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 import '../models/message.dart';
 import 'message_group.dart';
@@ -96,7 +97,7 @@ class _ConversationStreamState extends State<ConversationStream> {
       controller: widget.scrollController,
       padding: const EdgeInsets.all(8),
       itemCount: groups.length + (widget.isLoading ? 1 : 0),
-      cacheExtent: 500,
+      scrollCacheExtent: const ScrollCacheExtent.pixels(500),
       itemBuilder: (context, index) {
         if (index < groups.length) {
           final group = groups[index];
