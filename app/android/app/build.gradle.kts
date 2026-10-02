@@ -6,9 +6,10 @@ plugins {
 
 android {
     namespace = "com.example.pocket_assistant"
-    // Flutter 3.47.6 defaults this to 36, but permission_handler_android requires 37.
-    // compileSdk only gates which APIs are available at compile time; it is backward
-    // compatible and does not change runtime behaviour (that is targetSdk).
+    // Flutter 3.47.6 defaults this to 36. We sit one ahead deliberately: no current
+    // plugin needs more than 36, but when one does, AGP fails the whole build with an
+    // error that names the offending plugin rather than the fix. compileSdk only gates
+    // which APIs are available at compile time; it does not change runtime behaviour.
     compileSdk = 37
     ndkVersion = flutter.ndkVersion
 

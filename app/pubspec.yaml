@@ -2,7 +2,7 @@ name: nexus
 description: Voice-controlled AI assistant with online backend.
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 0.2.0+2
 
 environment:
   sdk: '>=3.13.0 <4.0.0'
@@ -11,10 +11,7 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # HTTP client with SSE support
-  dio: ^5.11.1
-
-  # Voice input (offline with sherpa-onnx)
+  # Offline voice input (sherpa-onnx) and its storage/caching needs
   sherpa_onnx: ^1.13.8
   path_provider: ^2.1.6
   path: ^1.9.1
@@ -22,7 +19,7 @@ dependencies:
   # Audio recording for voice input
   record: ^7.1.1
 
-  # For model download
+  # For model download (SSE + plain HTTP)
   http: ^1.6.0
   archive: ^4.3.0
 
@@ -32,14 +29,8 @@ dependencies:
   # Persistent settings storage
   shared_preferences: ^2.5.5
 
-  # File picker for cert import
-  file_picker: ^13.1.0
-
   # Model metadata cache with ETag-based revalidation
   flutter_cache_manager: ^3.4.5
-
-  # Permissions
-  permission_handler: ^13.0.2
 
   # Location services
   geolocator: ^14.1.1
@@ -47,22 +38,8 @@ dependencies:
   # UUID generation
   uuid: ^4.6.0
 
-  # Material icons
-  cupertino_icons: ^2.0.0
-  mobile_scanner: ^7.4.2
-
   # Shimmer loading effect
   shimmer: ^4.0.0
-
-  # Markdown rendering for assistant responses
-  flutter_markdown: ^0.7.7+1
-
-  # Charts for data visualization
-  fl_chart: ^1.2.0
-
-  # Code syntax highlighting
-  flutter_highlight: ^0.7.0
-  highlight: ^0.7.0
 
   # URL launching for link component
   url_launcher: ^6.3.2

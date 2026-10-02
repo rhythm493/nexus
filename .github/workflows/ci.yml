@@ -85,13 +85,14 @@ jobs:
         run: flutter pub get
 
       - name: Build debug APK
-        run: flutter build apk --debug
+        run: flutter build apk --debug --split-per-abi
 
-      - name: Upload debug APK
+      - name: Upload debug APKs
         uses: actions/upload-artifact@v4
         with:
           name: nexus-debug-apk
-          path: app/build/app/outputs/flutter-apk/app-debug.apk
+          path: app/build/app/outputs/flutter-apk/app-*-debug.apk
+          if-no-files-found: error
           retention-days: 7
 
   docker-build:
@@ -158,18 +159,22 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Build release APK
-        run: flutter build apk --release
+      - name: Build release APKs
+        # Per-ABI rather than the universal APK: the native libs from record's `jni`
+        # dependency and sherpa-onnx ship for all three ABIs, so the universal build
+        # is roughly three times the size for no benefit to any real device.
+        run: flutter build apk --release --split-per-abi
 
-      - name: Upload release APK
+      - name: Upload release APKs
         uses: actions/upload-artifact@v4
         with:
           name: nexus-release-apk
-          path: app/build/app/outputs/flutter-apk/app-release.apk
+          path: app/build/app/outputs/flutter-apk/app-*-release.apk
+          if-no-files-found: error
           retention-days: 90
 
       - name: Upload to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/app/outputs/flutter-apk/app-release.apk
+          files: app/build/app/outputs/flutter-apk/app-*-release.apk
+          fail_on_unmatched_files: true
