@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -127,7 +129,7 @@ func (e *Engine) Start(ctx context.Context) error {
 
 	slog.Info("Starting radio engine",
 		"script", e.cfg.ScriptPath,
-		"telnet", fmt.Sprintf("%s:%d", e.cfg.TelnetHost, e.cfg.TelnetPort),
+		"telnet", net.JoinHostPort(e.cfg.TelnetHost, strconv.Itoa(e.cfg.TelnetPort)),
 		"stream", e.streamURL,
 	)
 

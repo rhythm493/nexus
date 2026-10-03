@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -66,7 +67,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		c.conn = nil
 	}
 
-	addr := fmt.Sprintf("%s:%d", c.host, c.port)
+	addr := net.JoinHostPort(c.host, strconv.Itoa(c.port))
 
 	var lastErr error
 	maxRetries := 3
@@ -291,7 +292,7 @@ func (c *Client) reconnectLocked() error {
 		c.conn = nil
 	}
 
-	addr := fmt.Sprintf("%s:%d", c.host, c.port)
+	addr := net.JoinHostPort(c.host, strconv.Itoa(c.port))
 
 	// Use a short timeout for reconnection to avoid blocking under mutex
 	conn, err := net.DialTimeout("tcp", addr, c.reconnectTimeout)

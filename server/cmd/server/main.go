@@ -2,11 +2,12 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -210,7 +211,7 @@ func main() {
 				defer radioEngine.Stop()
 				slog.Info("Radio engine started",
 					"stream_url", radioEngine.StreamURL(),
-					"telnet", fmt.Sprintf("%s:%d", cfg.Radio.TelnetHost, cfg.Radio.TelnetPort),
+					"telnet", net.JoinHostPort(cfg.Radio.TelnetHost, strconv.Itoa(cfg.Radio.TelnetPort)),
 				)
 			}
 		}
