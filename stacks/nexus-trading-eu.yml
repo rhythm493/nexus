@@ -47,6 +47,18 @@ services:
       # part of what was running on VM1.
       - RADIO_ENABLED=false
       - YOUTUBE_ENABLED=false
+      # Authentication. Defaults to off so the stack behaves exactly as it did
+      # before sign-in existed and self-hosters are not forced into it. Set
+      # AUTH_MODE=google plus GOOGLE_CLIENT_ID in the host .env to require a
+      # Google account for every route except /api/v1/health, /api/v1/qrcode
+      # and the sign-in endpoint itself.
+      #
+      # GOOGLE_CLIENT_ID must be the OAuth 2.0 *Web* client ID. It is the
+      # value the app passes as serverClientId and the value the server
+      # requires in the token's aud claim, so the two must agree. Comma
+      # separate to accept more than one client ID.
+      - AUTH_MODE=${AUTH_MODE:-off}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
     volumes:
       - nexus_library-data:/app/library
       - nexus_mcp-data:/app/mcp-servers
