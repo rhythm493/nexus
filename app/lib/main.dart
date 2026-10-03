@@ -40,9 +40,14 @@ import 'components/interactive/button_component.dart';
 import 'components/interactive/form_component.dart';
 import 'components/interactive/toggle_component.dart';
 import 'components/interactive/slider_component.dart';
+import 'services/auth_service.dart';
 
 void main() {
   _registerComponents();
+  // Deliberately not awaited: loading the Google plugin and restoring the
+  // account can take a moment, and the UI should not wait on it. Anything that
+  // needs a session calls ensureSession(), which awaits init() itself.
+  AuthService.instance.init();
   runApp(const NexusApp());
 }
 
@@ -109,6 +114,10 @@ class NexusApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => ModeService()),
         ChangeNotifierProvider(create: (_) => LocationService()),
         ChangeNotifierProvider(create: (_) => CartService()),
+        // Singleton: ApiService and the other services reach it directly to stamp
+        // Authorization headers, so it must be the same instance everywhere.
+        // .value rather than create, so we do not construct a second one.
+        ChangeNotifierProvider<AuthService>.value(value: AuthService.instance),
         ChangeNotifierProvider(
           create: (context) => ConversationProvider()
             ..setServices(

@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
+import 'nexus_http.dart';
 
 class ModeService extends ChangeNotifier {
   SharedPreferences? _prefs;
@@ -101,6 +102,7 @@ class ModeService extends ChangeNotifier {
     try {
       final uri = Uri.parse('$baseUrl/api/v1/chat');
       final request = await _httpClient!.postUrl(uri);
+      stampAuthHeaders(request);
       request.headers.contentType = ContentType.json;
 
       // Send location_set tool request as a chat message

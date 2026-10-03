@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/message.dart';
+import 'auth_service.dart';
+import 'nexus_http.dart';
 
 const Duration _defaultTimeout = Duration(seconds: 30);
 const Duration _healthCheckTimeout = Duration(seconds: 5);
@@ -58,6 +60,7 @@ class ApiService extends ChangeNotifier {
     }
 
     _baseUrl = savedUrl;
+    AuthService.instance.setServer(_baseUrl);
     _conversationId = const Uuid().v4();
     notifyListeners();
     await checkHealth();
@@ -71,6 +74,9 @@ class ApiService extends ChangeNotifier {
   void setServer(String url) {
     _baseUrl = url;
     _conversationId = const Uuid().v4();
+    // Sessions belong to the server that issued them, so point auth at the
+    // new one before anything can try to stamp a token from the old one.
+    AuthService.instance.setServer(url);
     _saveServer(url);
     notifyListeners();
   }
@@ -103,6 +109,7 @@ class ApiService extends ChangeNotifier {
       debugPrint('Health check: $_baseUrl/api/v1/health');
       final uri = Uri.parse('$_baseUrl/api/v1/health');
       final request = await _client!.getUrl(uri);
+      stampAuthHeaders(request);
       final response = await request.close().timeout(
         _healthCheckTimeout,
         onTimeout: () {
@@ -136,15 +143,24 @@ class ApiService extends ChangeNotifier {
   }
 
   /// Send a chat message and receive SSE stream of responses
-  Stream<SSEEvent> chat(String message) async* {
+  ///
+  /// [isRetry] guards the one automatic retry after a 401, so a server that
+  /// keeps rejecting us cannot spin us forever.
+  Stream<SSEEvent> chat(String message, {bool isRetry = false}) async* {
     if (_baseUrl == null) {
       yield SSEEvent(type: 'error', content: 'Not connected');
       return;
     }
 
     try {
+      // Top up the session if we can do so without prompting. Cheap when there
+      // is nothing to do, and it means a server that restarted underneath us
+      // does not surface as an error the user has to retry by hand.
+      await AuthService.instance.ensureSession();
+
       final uri = Uri.parse('$_baseUrl/api/v1/chat');
       final request = await _client!.postUrl(uri);
+      stampAuthHeaders(request);
 
       request.headers.contentType = ContentType.json;
       final requestBody = {
@@ -157,6 +173,19 @@ class ApiService extends ChangeNotifier {
       request.write(jsonEncode(requestBody));
 
       final response = await request.close();
+
+      if (isUnauthorized(response.statusCode)) {
+        await response.drain<void>();
+        if (!isRetry && await tryRecoverSession()) {
+          yield* chat(message, isRetry: true);
+          return;
+        }
+        yield SSEEvent(
+          type: 'error',
+          content: 'Sign in to continue. Tap the account icon to sign in.',
+        );
+        return;
+      }
 
       if (response.statusCode != 200) {
         yield SSEEvent(type: 'error', content: 'Server error: ${response.statusCode}');
@@ -209,15 +238,22 @@ class ApiService extends ChangeNotifier {
   /// Send an action (from interactive component) to the server.
   ///
   /// Returns an SSE stream with the action result.
-  Stream<SSEEvent> sendAction(String action, Map<String, dynamic>? args) async* {
+  Stream<SSEEvent> sendAction(
+    String action,
+    Map<String, dynamic>? args, {
+    bool isRetry = false,
+  }) async* {
     if (_baseUrl == null) {
       yield SSEEvent(type: 'error', content: 'Not connected');
       return;
     }
 
     try {
+      await AuthService.instance.ensureSession();
+
       final uri = Uri.parse('$_baseUrl/api/v1/action');
       final request = await _client!.postUrl(uri);
+      stampAuthHeaders(request);
 
       request.headers.contentType = ContentType.json;
       request.write(jsonEncode({
@@ -227,6 +263,16 @@ class ApiService extends ChangeNotifier {
       }));
 
       final response = await request.close();
+
+      if (isUnauthorized(response.statusCode)) {
+        await response.drain<void>();
+        if (!isRetry && await tryRecoverSession()) {
+          yield* sendAction(action, args, isRetry: true);
+          return;
+        }
+        yield SSEEvent(type: 'error', content: 'Sign in to continue.');
+        return;
+      }
 
       if (response.statusCode != 200) {
         yield SSEEvent(type: 'error', content: 'Action failed: ${response.statusCode}');
@@ -268,6 +314,7 @@ class ApiService extends ChangeNotifier {
     try {
       final uri = Uri.parse('$_baseUrl/api/v1/tools');
       final request = await _client!.getUrl(uri);
+      stampAuthHeaders(request);
       final response = await request.close();
 
       if (response.statusCode == 200) {
@@ -290,6 +337,7 @@ class ApiService extends ChangeNotifier {
     _isConnected = false;
     _baseUrl = null;
     _conversationId = null;
+    AuthService.instance.setServer(null);
     notifyListeners();
   }
 

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'model_cache_service.dart';
+import 'nexus_http.dart';
 
 class SettingsService extends ChangeNotifier {
   SharedPreferences? _prefs;
@@ -52,6 +53,7 @@ class SettingsService extends ChangeNotifier {
     try {
       final uri = Uri.parse('$baseUrl/api/v1/providers');
       final request = await _httpClient!.getUrl(uri);
+      stampAuthHeaders(request);
       final response = await request.close().timeout(
         const Duration(seconds: 10),
         onTimeout: () => throw TimeoutException('Request timed out'),
@@ -107,6 +109,7 @@ class SettingsService extends ChangeNotifier {
     try {
       final uri = Uri.parse('$baseUrl/api/v1/providers/$provider/models');
       final request = await _httpClient!.getUrl(uri);
+      stampAuthHeaders(request);
       final response = await request.close().timeout(
         const Duration(seconds: 10),
         onTimeout: () => throw TimeoutException('Request timed out'),

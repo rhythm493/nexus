@@ -11,6 +11,7 @@ import '../services/voice_service.dart';
 import '../providers/conversation_provider.dart';
 import '../widgets/conversation_stream.dart';
 import '../widgets/agent_status_bar.dart';
+import '../services/auth_service.dart';
 import '../widgets/context_bar.dart';
 import '../widgets/quick_actions.dart';
 import '../widgets/mode_tabs.dart';
@@ -109,6 +110,97 @@ class _ChatScreenState extends State<ChatScreen> {
     context.read<ConversationProvider>().sendMessage(text, context.read<ApiService>());
   }
 
+  /// App-bar account button.
+  ///
+  /// Only shown when signed in or when a Google account is known, so a server
+  /// with auth switched off never nags the user about signing in.
+  Widget _buildAccountButton(BuildContext context, AuthService auth, Widget? _) {
+    final signedIn = auth.isAuthenticated;
+
+    if (!signedIn && !auth.hasGoogleAccount) {
+      return const SizedBox.shrink();
+    }
+
+    return IconButton(
+      tooltip: signedIn ? 'Signed in as ${auth.userEmail ?? 'account'}' : 'Sign in',
+      icon: auth.isSigningIn
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : Icon(
+              signedIn ? Icons.account_circle : Icons.account_circle_outlined,
+              color: signedIn ? null : Theme.of(context).colorScheme.outline,
+            ),
+      onPressed: auth.isSigningIn ? null : () => _handleAccountTap(auth),
+    );
+  }
+
+  Future<void> _handleAccountTap(AuthService auth) async {
+    final messenger = ScaffoldMessenger.of(context);
+
+    if (auth.isAuthenticated) {
+      _showAccountSheet(auth);
+      return;
+    }
+
+    final ok = await auth.signIn();
+    if (!mounted) return;
+
+    if (ok) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Signed in as ${auth.userEmail ?? 'your account'}'),
+          backgroundColor: Colors.green.shade700,
+        ),
+      );
+      // Models, tools and modes were all fetched unauthenticated and may have
+      // failed, so refresh them now that a credential exists.
+      context.read<ApiService>().checkHealth();
+      return;
+    }
+
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(auth.lastError ?? 'Could not sign in.'),
+        backgroundColor: Colors.red.shade700,
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  }
+
+  void _showAccountSheet(AuthService auth) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: CircleAvatar(
+                backgroundImage:
+                    auth.userPicture != null ? NetworkImage(auth.userPicture!) : null,
+                child: auth.userPicture != null ? null : const Icon(Icons.person),
+              ),
+              title: Text(auth.userName ?? 'Signed in'),
+              subtitle: Text(auth.userEmail ?? ''),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.logout),
+              title: const Text('Sign out'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                auth.signOut();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -132,6 +224,7 @@ class _ChatScreenState extends State<ChatScreen> {
             },
             tooltip: 'New conversation',
           ),
+          Consumer<AuthService>(builder: _buildAccountButton),
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: _showSettingsSheet,

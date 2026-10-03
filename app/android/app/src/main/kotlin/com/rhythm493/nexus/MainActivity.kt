@@ -1,4 +1,4 @@
-package com.example.pocket_assistant
+package com.rhythm493.nexus
 
 import io.flutter.embedding.android.FlutterActivity
 

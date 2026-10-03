@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import '../services/nexus_http.dart';
 
 class InlineSearch extends StatefulWidget {
   final String? baseUrl;
@@ -48,6 +49,7 @@ class _InlineSearchState extends State<InlineSearch> {
     try {
       final client = HttpClient()..badCertificateCallback = (_, _, _) => true;
       final req = await client.getUrl(Uri.parse('${widget.baseUrl}/api/v1/search?q=${Uri.encodeComponent(query)}'));
+      stampAuthHeaders(req);
       final resp = await req.close();
       if (resp.statusCode != 200) return;
 

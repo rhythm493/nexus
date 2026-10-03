@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import '../models/cart_full_state.dart';
 import '../models/cart_state.dart';
+import 'nexus_http.dart';
 
 class CartService extends ChangeNotifier {
   CartFullState? _fullCart;
@@ -55,6 +56,7 @@ class CartService extends ChangeNotifier {
   Future<void> fetchFullCart(String baseUrl, String convId) async {
     try {
       final req = await _httpClient.getUrl(Uri.parse('$baseUrl/api/v1/cart/$convId/full'));
+      stampAuthHeaders(req);
       final resp = await req.close();
       if (resp.statusCode == 200) {
         final body = await resp.transform(utf8.decoder).join();
@@ -70,6 +72,7 @@ class CartService extends ChangeNotifier {
   Future<bool> addProduct(String baseUrl, String convId, String query, String provider) async {
     try {
       final req = await _httpClient.postUrl(Uri.parse('$baseUrl/api/v1/cart/$convId/add'));
+      stampAuthHeaders(req);
       req.headers.contentType = ContentType.json;
       req.write(jsonEncode({'query': query, 'provider': provider}));
       final resp = await req.close();
@@ -92,6 +95,7 @@ class CartService extends ChangeNotifier {
   Future<bool> swapItem(String baseUrl, String convId, String query, String provider) async {
     try {
       final req = await _httpClient.postUrl(Uri.parse('$baseUrl/api/v1/cart/$convId/swap'));
+      stampAuthHeaders(req);
       req.headers.contentType = ContentType.json;
       req.write(jsonEncode({'query': query, 'provider': provider}));
       final resp = await req.close();
