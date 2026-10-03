@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/rhythm493/pocket-assistant/server/internal/auth"
 )
 
 // responseWriter wraps http.ResponseWriter to capture status code
@@ -41,6 +43,18 @@ func (s *Server) logMiddleware(next http.Handler) http.Handler {
 		// Call next handler
 		next.ServeHTTP(wrapped, r)
 
+		// Attribute the request to a user when one is resolved. Empty when
+		// authentication is off.
+		var user string
+		if ident := auth.IdentityFromOrAnonymous(r.Context()); !ident.Anonymous() {
+			user = ident.Email
+			if user == "" {
+				// Google accounts may withhold the email scope; the subject
+				// is always present.
+				user = ident.Subject
+			}
+		}
+
 		// Log request
 		slog.Info("HTTP request",
 			"method", r.Method,
@@ -49,6 +63,7 @@ func (s *Server) logMiddleware(next http.Handler) http.Handler {
 			"duration", time.Since(start),
 			"client", clientCN,
 			"remote", r.RemoteAddr,
+			"user", user,
 		)
 	})
 }

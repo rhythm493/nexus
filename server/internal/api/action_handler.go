@@ -32,6 +32,14 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Tool calls reach the LLM and the cart, so they are rate limited on the same
+	// terms as chat. Without this an account could bypass the chat limit simply by
+	// using the action endpoint instead.
+	if !s.allowRequest(r) {
+		http.Error(w, "Too many requests", http.StatusTooManyRequests)
+		return
+	}
+
 	var req ActionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -63,12 +71,13 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if s.cartTools != nil && cart.IsCartTool(req.Action) {
-		result, err = s.cartTools.ExecuteTool(ctx, req.ConversationID, req.Action, req.Args)
+		key := s.convKey(r, req.ConversationID)
+		result, err = s.cartTools.ExecuteTool(ctx, key, req.Action, req.Args)
 		if err != nil {
 			slog.Error("Cart tool execution failed", "tool", req.Action, "error", err)
 			result = map[string]interface{}{"error": err.Error()}
 		} else if req.ConversationID != "" {
-			if c := s.cartManager.GetCart(req.ConversationID); c != nil {
+			if c := s.cartManager.GetCart(key); c != nil {
 				s.sendSSE(w, flusher, SSEEvent{Type: "cart_update", Result: c.FullDetail()})
 			}
 		}

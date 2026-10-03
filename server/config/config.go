@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -38,6 +39,9 @@ type Config struct {
 
 	// Library settings
 	Library LibraryConfig `yaml:"library"`
+
+	// Authentication
+	Auth AuthConfig `yaml:"auth"`
 
 	// Assistant Modes
 	Modes []ModeConfig `yaml:"modes"`
@@ -71,6 +75,26 @@ type LibraryConfig struct {
 	DataDir      string `yaml:"data_dir"`      // Directory for downloaded audio files
 	DatabasePath string `yaml:"database_path"` // Path to SQLite database
 	MaxSizeMB    int    `yaml:"max_size_mb"`   // Maximum library size in MB
+}
+
+// AuthConfig controls access to the API.
+//
+// The zero value leaves the server wide open, which is what every deployment
+// had before authentication existed. Set Mode to "google" to require a Google
+// sign-in on every route except the public three (health, qrcode, the sign-in
+// endpoint itself).
+type AuthConfig struct {
+	Mode string `yaml:"mode"` // "off" (default) or "google"
+
+	// GoogleClientIDs is the set of accepted `aud` values. Google's spec allows an
+	// ID token to be minted for any of an app's client IDs, so this is a list
+	// rather than a single value; the Web client ID is the one the Android app
+	// actually presents.
+	GoogleClientIDs []string `yaml:"google_client_ids"`
+
+	// GoogleIssuer overrides the OIDC discovery document location. Empty means
+	// Google's, which is hard-coded rather than templated, as Google instructs.
+	GoogleIssuer string `yaml:"google_issuer"`
 }
 
 // LLMConfig holds LLM provider configuration
@@ -370,6 +394,28 @@ func Load() (*Config, error) {
 		if s, err := strconv.Atoi(size); err == nil {
 			cfg.Library.MaxSizeMB = s
 		}
+	}
+
+	// Auth env overrides.
+	//
+	// AUTH_MODE is the single switch that decides whether the API is gated.
+	// Absent or unrecognised values leave it open, so an existing deployment
+	// that sets nothing keeps behaving exactly as it did before.
+	if mode := os.Getenv("AUTH_MODE"); mode != "" {
+		cfg.Auth.Mode = strings.ToLower(strings.TrimSpace(mode))
+	}
+	// Comma-separated so several client IDs can be accepted, which Google's `aud`
+	// validation requires: a token minted for any one of the app's clients is
+	// legitimately valid.
+	if ids := os.Getenv("GOOGLE_CLIENT_ID"); ids != "" {
+		for _, id := range strings.Split(ids, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				cfg.Auth.GoogleClientIDs = append(cfg.Auth.GoogleClientIDs, id)
+			}
+		}
+	}
+	if issuer := os.Getenv("GOOGLE_ISSUER"); issuer != "" {
+		cfg.Auth.GoogleIssuer = issuer
 	}
 
 	// Convert library paths to absolute

@@ -11,7 +11,7 @@ import (
 
 // handleGetCart returns the compact cart summary.
 func (s *Server) handleGetCart(w http.ResponseWriter, r *http.Request) {
-	convID := r.PathValue("convId")
+	convID := s.convKey(r, r.PathValue("convId"))
 	if convID == "" {
 		http.Error(w, `{"error":"conversation ID required"}`, http.StatusBadRequest)
 		return
@@ -29,7 +29,7 @@ func (s *Server) handleGetCart(w http.ResponseWriter, r *http.Request) {
 
 // handleGetCartFull returns the full cart with all product details (images, brands, etc).
 func (s *Server) handleGetCartFull(w http.ResponseWriter, r *http.Request) {
-	convID := r.PathValue("convId")
+	convID := s.convKey(r, r.PathValue("convId"))
 	if convID == "" {
 		http.Error(w, `{"error":"conversation ID required"}`, http.StatusBadRequest)
 		return
@@ -47,7 +47,7 @@ func (s *Server) handleGetCartFull(w http.ResponseWriter, r *http.Request) {
 
 // handleSwapCartItem swaps an item's preferred provider.
 func (s *Server) handleSwapCartItem(w http.ResponseWriter, r *http.Request) {
-	convID := r.PathValue("convId")
+	convID := s.convKey(r, r.PathValue("convId"))
 	if convID == "" {
 		http.Error(w, `{"error":"conversation ID required"}`, http.StatusBadRequest)
 		return
@@ -83,7 +83,7 @@ func (s *Server) handleSwapCartItem(w http.ResponseWriter, r *http.Request) {
 
 // handleAddCartItem adds a product to the cart from inline search (bypasses LLM).
 func (s *Server) handleAddCartItem(w http.ResponseWriter, r *http.Request) {
-	convID := r.PathValue("convId")
+	convID := s.convKey(r, r.PathValue("convId"))
 	if convID == "" {
 		http.Error(w, `{"error":"conversation ID required"}`, http.StatusBadRequest)
 		return
@@ -150,7 +150,7 @@ func (s *Server) handleAddCartItem(w http.ResponseWriter, r *http.Request) {
 
 // handleRemoveCartItem removes an item from the cart.
 func (s *Server) handleRemoveCartItem(w http.ResponseWriter, r *http.Request) {
-	convID := r.PathValue("convId")
+	convID := s.convKey(r, r.PathValue("convId"))
 	query := r.PathValue("query")
 	if convID == "" || query == "" {
 		http.Error(w, `{"error":"conversation ID and query required"}`, http.StatusBadRequest)

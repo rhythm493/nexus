@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rhythm493/pocket-assistant/server/config"
+	"github.com/rhythm493/pocket-assistant/server/internal/auth"
 	"github.com/rhythm493/pocket-assistant/server/internal/cart"
 	"github.com/rhythm493/pocket-assistant/server/internal/discovery"
 	"github.com/rhythm493/pocket-assistant/server/internal/llm"
@@ -38,11 +39,12 @@ type Server struct {
 	youtube       *youtube.Service
 	radioEngine   *radio.Engine
 	radioTools    *radio.ToolHandlers
-	cartManager    *cart.Manager
+	cartManager   *cart.Manager
 	cartTools      *cart.ToolHandlers
 	quickcomClient *quickcom.Client
 	modelsCache   *modelcache.Cache
-	rateLimits    sync.Map // map[string]time.Time — per-IP last request time
+	rateLimits    sync.Map // map[string]time.Time — last request time, keyed "ip:<addr>" and "user:<sub>"
+	auth          *auth.Service
 	done          chan struct{}
 }
 
@@ -93,7 +95,7 @@ type ToolsResponse struct {
 }
 
 // NewServer creates a new API server
-func NewServer(cfg *config.Config, llmProvider llm.Provider, mcpHost *mcp.Host, modeManager *mode.Manager, yt *youtube.Service, radioEngine *radio.Engine, radioTools *radio.ToolHandlers, cartManager *cart.Manager, cartTools *cart.ToolHandlers, quickcomClient *quickcom.Client, modelsCache *modelcache.Cache) *Server {
+func NewServer(cfg *config.Config, llmProvider llm.Provider, mcpHost *mcp.Host, modeManager *mode.Manager, yt *youtube.Service, radioEngine *radio.Engine, radioTools *radio.ToolHandlers, cartManager *cart.Manager, cartTools *cart.ToolHandlers, quickcomClient *quickcom.Client, modelsCache *modelcache.Cache, authSvc *auth.Service) *Server {
 	return &Server{
 		config:         cfg,
 		llmProvider:    llmProvider,
@@ -106,6 +108,7 @@ func NewServer(cfg *config.Config, llmProvider llm.Provider, mcpHost *mcp.Host, 
 		cartTools:      cartTools,
 		quickcomClient: quickcomClient,
 		modelsCache:    modelsCache,
+		auth:           authSvc,
 		done:           make(chan struct{}),
 	}
 }
@@ -157,6 +160,12 @@ func (s *Server) Start() error {
 
 	mux := http.NewServeMux()
 
+	// Auth routes. Sign-in is public by definition — it is how a caller
+	// obtains a session in the first place — and sign-out is authenticated so
+	// it can only revoke the caller's own session.
+	mux.HandleFunc("POST /api/v1/auth/google", s.handleGoogleSignIn)
+	mux.HandleFunc("POST /api/v1/auth/signout", s.handleSignOut)
+
 	// Register routes
 	mux.HandleFunc("POST /api/v1/chat", s.handleChat)
 	mux.HandleFunc("POST /api/v1/action", s.handleAction)
@@ -207,8 +216,13 @@ func (s *Server) Start() error {
 		mux.HandleFunc("GET /api/v1/models", s.handleGetModelsCache)
 	}
 
-	// Wrap with middleware
+	// Wrap with middleware. Auth runs outermost so that logMiddleware sees a
+	// request whose context already carries the resolved identity, which is
+	// what lets the access log attribute a request to a user.
 	handler := s.logMiddleware(mux)
+	if s.auth != nil {
+		handler = s.auth.Middleware(handler)
+	}
 
 	s.httpServer = &http.Server{
 		Addr:    fmt.Sprintf(":%d", s.config.Port),
@@ -274,7 +288,7 @@ func (s *Server) handleGetModes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetConversation(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	conv, ok := s.conversations.Load(id)
+	conv, ok := s.conversations.Load(s.convKey(r, id))
 	if !ok {
 		http.Error(w, "Conversation not found", http.StatusNotFound)
 		return
@@ -286,22 +300,55 @@ func (s *Server) handleGetConversation(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleChat processes chat messages with SSE streaming
-func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
-	// Simple per-IP rate limiting: reject if less than 500ms since last request
+// rateLimitInterval is the minimum gap between two LLM-driving requests.
+const rateLimitInterval = 500 * time.Millisecond
+
+// allowRequest rate limits on two independent dimensions: the client IP, and —
+// when the caller is authenticated — the account subject.
+//
+// The previous limiter keyed only on IP, which a single account can sidestep by
+// rotating addresses, and which punishes several people sharing one NAT. Keying
+// on both means an account is throttled as one identity however many IPs it
+// comes from.
+//
+// Both dimensions share the same interval, so a user on a single device sees
+// exactly the behaviour they saw before this was split out; the account bucket
+// only starts to bite when one subject is genuinely issuing requests faster
+// than 2/s from multiple addresses.
+func (s *Server) allowRequest(r *http.Request) bool {
 	clientIP := r.RemoteAddr
 	if ip, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		clientIP = ip
 	}
+
+	// Prefixes keep the two dimensions in one map so a single sweep covers both.
+	keys := []string{"ip:" + clientIP}
+	if subject := auth.IdentityFromOrAnonymous(r.Context()).Subject; subject != "" {
+		keys = append(keys, "user:"+subject)
+	}
+
 	now := time.Now()
-	if lastVal, ok := s.rateLimits.Load(clientIP); ok {
-		lastTime := lastVal.(time.Time)
-		if now.Sub(lastTime) < 500*time.Millisecond {
-			http.Error(w, "Too many requests", http.StatusTooManyRequests)
-			return
+	// Check every dimension before consuming any, so a request rejected by one
+	// limit does not refresh the others.
+	for _, key := range keys {
+		if lastVal, ok := s.rateLimits.Load(key); ok {
+			if now.Sub(lastVal.(time.Time)) < rateLimitInterval {
+				return false
+			}
 		}
 	}
-	s.rateLimits.Store(clientIP, now)
+	for _, key := range keys {
+		s.rateLimits.Store(key, now)
+	}
+	return true
+}
+
+// handleChat processes chat messages with SSE streaming
+func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	if !s.allowRequest(r) {
+		http.Error(w, "Too many requests", http.StatusTooManyRequests)
+		return
+	}
 
 	var req ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -345,7 +392,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		convID = uuid.New().String()
 	}
 
-	conv := s.getOrCreateConversation(convID)
+	// Namespaces the conversation and its derived cart by the caller's subject.
+	// convID itself stays client-facing and is what the header echoes back.
+	key := s.convKey(r, convID)
+
+	// Get or create conversation
+	conv := s.getOrCreateConversation(key)
 
 	// Add user message
 	conv.mu.Lock()
@@ -525,13 +577,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				// Execute tool - check cart tools, then radio tools, then MCP
 				var result interface{}
 				if s.cartTools != nil && cart.IsCartTool(toolCall.Function.Name) {
-					result, err = s.cartTools.ExecuteTool(ctx, convID, toolCall.Function.Name, args)
+					result, err = s.cartTools.ExecuteTool(ctx, key, toolCall.Function.Name, args)
 					if err != nil {
 						slog.Error("Cart tool execution failed", "tool", toolCall.Function.Name, "error", err)
 						result = map[string]interface{}{"error": fmt.Sprintf("Tool '%s' failed: %s", toolCall.Function.Name, err.Error())}
 					}
 					// Emit cart-specific SSE events for Flutter UI (full detail for rich cards)
-					if c := s.cartManager.GetCart(convID); c != nil {
+					if c := s.cartManager.GetCart(key); c != nil {
 						switch toolCall.Function.Name {
 						case "cart_add", "cart_remove", "cart_clear":
 							s.sendSSE(w, flusher, SSEEvent{Type: "cart_update", Result: c.FullDetail()})

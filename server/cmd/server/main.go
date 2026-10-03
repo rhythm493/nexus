@@ -13,6 +13,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/rhythm493/pocket-assistant/server/config"
 	"github.com/rhythm493/pocket-assistant/server/internal/api"
+	"github.com/rhythm493/pocket-assistant/server/internal/auth"
 	"github.com/rhythm493/pocket-assistant/server/internal/cart"
 	"github.com/rhythm493/pocket-assistant/server/internal/discovery"
 	"github.com/rhythm493/pocket-assistant/server/internal/library"
@@ -247,7 +248,29 @@ func main() {
 		quickcomClient = quickcomBridge.Client()
 	}
 
-	server := api.NewServer(cfg, llmProvider, mcpHost, modeManager, ytService, radioEngine, radioTools, cartManager, cartTools, quickcomClient, modelCache)
+	// Build the auth service. With AUTH_MODE unset this makes no outbound
+	// network call and leaves every route open, so an existing deployment is
+	// unaffected.
+	authSvc, err := auth.New(ctx, auth.Config{
+		Mode:       auth.Mode(cfg.Auth.Mode),
+		ClientIDs:  cfg.Auth.GoogleClientIDs,
+		Issuer:     cfg.Auth.GoogleIssuer,
+		SessionTTL: auth.DefaultSessionTTL,
+	})
+	if err != nil {
+		slog.Error("Invalid auth configuration", "mode", cfg.Auth.Mode, "error", err)
+		os.Exit(1)
+	}
+	if authSvc.Enabled() {
+		slog.Info("Authentication enabled", "mode", cfg.Auth.Mode, "accepted_client_ids", len(cfg.Auth.GoogleClientIDs))
+		if len(cfg.Auth.GoogleClientIDs) == 0 {
+			slog.Warn("AUTH_MODE is set but GOOGLE_CLIENT_ID is empty; no ID token can ever be accepted")
+		}
+	} else {
+		slog.Info("Authentication disabled; all API routes are unauthenticated", "mode", cfg.Auth.Mode)
+	}
+
+	server := api.NewServer(cfg, llmProvider, mcpHost, modeManager, ytService, radioEngine, radioTools, cartManager, cartTools, quickcomClient, modelCache, authSvc)
 
 	// Start mDNS advertisement
 	mdnsServer, err := mdns.Advertise(cfg.ServiceName, cfg.Port)
